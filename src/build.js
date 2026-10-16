@@ -332,6 +332,7 @@ export class BuildController {
     const near = (p, q, r) => (p.x - q.x) ** 2 + (p.z - q.z) ** 2 < r * r;
     if (far.some((p) => [...this.network.edges].some((e) => e.samples.some((q) => near(p, q, TRACK_GAP))))) problems.push('太靠近其他鐵路');
     if (pts.some((p) => this.stations.some((s) => this.#onPlatformZone(s, p)))) problems.push('會壓到車站');
+    if (this.#alongRoad(curve, length)) problems.push('不能沿著公路鋪（可以垂直穿越，做成平交道）');
     const blocker = this.#blockedBy(pts, 0.75);
     if (blocker) problems.push(`會壓到${blocker}`);
 
@@ -345,6 +346,29 @@ export class BuildController {
   #blockedBy(points, margin) {
     const b = this.world.blockers?.find((bl) => points.some((p) => bl.hit(p.x, p.z, margin)));
     return b?.label ?? null;
+  }
+
+  // Rail may cross a road (a level crossing) but not run along on top of it.
+  #alongRoad(curve, length) {
+    const net = window.__roads?.net;
+    if (!net?.segs?.size) return false;
+    const n = Math.max(4, Math.ceil(length / 0.3));
+    let run = 0;
+    const tan = new THREE.Vector3();
+    for (let i = 0; i <= n; i++) {
+      const u = i / n;
+      const p = curve.getPoint(u);
+      const ns = net.nearestSeg(p.x, p.z);
+      let parallel = false;
+      if (ns && ns.dist < 1.1) {
+        const rt = ns.seg.line.tangentAt(ns.s);
+        curve.getTangent(u, tan);
+        parallel = Math.abs(rt.x * tan.x + rt.z * tan.z) / Math.hypot(tan.x, tan.z) > 0.7;
+      }
+      run = parallel ? run + length / n : 0;
+      if (run > 1.6) return true;
+    }
+    return false;
   }
 
   #onPlatformZone(s, p) {
