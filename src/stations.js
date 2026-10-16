@@ -427,6 +427,8 @@ export class PassengerSystem {
     if (legs === undefined) legs = Math.round(between(P?.legs ?? [1, 3]));
     const step = (left) => {
       if (left <= 0) return this.#headToPlatform(r, r.home);
+      // Now and then pop home for a sit-down, a meal or a nap (see homes/).
+      if (this.homes?.maybeVisit(r, () => step(left - 1))) return;
       const home = r.home && this.stations.includes(r.home) ? r.home : null;
       const buddy = Math.random() < (P?.social ?? 0) ? this.#buddy(r) : null;
       let spot;
