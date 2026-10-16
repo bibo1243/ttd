@@ -7,6 +7,7 @@ import { ROAD_MATS, buildRoadMeshes } from './mesh.js';
 import { Traffic } from './traffic.js';
 import { makeShelter } from './props.js';
 import { injectStyle } from './style.js';
+import { rayToGround } from '../planet.js';
 
 // Roads module: lets the player lay roads (with junctions, dead-end turning
 // circles and level crossings), build bus stops, and choose which vehicles
@@ -59,10 +60,18 @@ class RoadsModule {
     this.#ui();
     this.#input();
     this.load();
+    // Rails and other modules keep clear of bus stops and road junctions.
+    const world = game.world;
+    world.blockers ??= [];
+    this.blockers = [
+      { label: '公車站', hit: (x, z, m = 0) => this.traffic.stops.some((s) => (s.pos.x - x) ** 2 + (s.pos.z - z) ** 2 < (0.9 + m) ** 2) },
+      { label: '公路路口', hit: (x, z, m = 0) => [...this.net.nodes].some((n) => n.segs.length >= 3 && (n.pos.x - x) ** 2 + (n.pos.z - z) ** 2 < (JUNCTION_R + 0.4 + m) ** 2) },
+    ];
+    world.blockers.push(...this.blockers);
     game.look?.onTime?.((night) => {
-      K.head.emissiveIntensity = night ? 2.6 : 1.6;
-      K.tail.emissiveIntensity = night ? 2 : 1.3;
-      ROAD_MATS.bulb.emissiveIntensity = night ? 3 : 1.5;
+      K.head.emissiveIntensity = 1.6 + night;
+      K.tail.emissiveIntensity = 1.3 + 0.7 * night;
+      ROAD_MATS.bulb.emissiveIntensity = 1.5 + 1.5 * night;
     });
     window.__roads = this;
   }
@@ -163,7 +172,7 @@ class RoadsModule {
     const r = dom.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.game.camera);
-    const g = this.raycaster.ray.intersectPlane(this.ground, new THREE.Vector3());
+    const g = rayToGround(this.raycaster.ray);
     if (!g) return;
     this.pointer = g;
     if (this.mode === 'road') this.sub === 'build' ? this.#previewRoad() : this.#previewDemolish();
@@ -327,6 +336,8 @@ class RoadsModule {
     // Keep clear of other roads except where they meet.
     const far = pts.filter((p, i) => i % 2 === 0 && !keyPts.some((k) => this.#near(p, k, ROAD_GAP + 0.3)));
     if (far.some((p) => [...this.net.segs].some((s) => s.line.nearest(p.x, p.z).dist < ROAD_GAP))) problems.push('太靠近其他道路');
+    const blocker = this.#blockedBy(pts.filter((p, i) => i % 2 === 0), ROAD_HALF + WALK);
+    if (blocker) problems.push(`會壓到${blocker}`);
 
     // Rails: level crossings are fine at a decent angle.
     const railCross = [];
@@ -463,15 +474,15 @@ class RoadsModule {
     this.railSeen = this.game.network.version;
     const rails = [...this.game.network.edges].map((e) => (e._roadPoly ??= new Polyline(e.samples)));
     this.group.clear();
-    this.group.add(buildRoadMeshes(this.net, rails));
+    this.group.add(buildRoadMeshes(this.net, rails, this.traffic.stops.map((st) => st.pos)));
   }
 
   #registerLamps() {
     const look = this.game.look;
     if (!look?.addLamp) return;
     this.lampAnchors ??= [];
-    for (const a of this.lampAnchors) {
-      look.removeLamp?.(a);
+    for (const [a, off] of this.lampAnchors) {
+      off?.();
       a.removeFromParent();
     }
     this.lampAnchors = [];
@@ -483,8 +494,7 @@ class RoadsModule {
       const o = new THREE.Object3D();
       o.position.set(0, 1.0, 0.15).applyMatrix4(m);
       this.scene.add(o);
-      look.addLamp(o, { color: 0xffd9a0, intensity: 2, distance: 4 });
-      this.lampAnchors.push(o);
+      this.lampAnchors.push([o, look.addLamp(o, { color: 0xffd9a0, intensity: 2, distance: 4 })]);
     }
   }
 
@@ -531,6 +541,12 @@ class RoadsModule {
 
   // ---------- Bus stop tool ----------
 
+  // Shops and other modules' buildings (world.blockers), not our own.
+  #blockedBy(points, margin) {
+    const b = (this.game.world.blockers ?? []).find((bl) => !this.blockers.includes(bl) && points.some((p) => bl.hit(p.x, p.z, margin)));
+    return b?.label ?? null;
+  }
+
   #planStop() {
     const g = this.pointer;
     const ns = this.net.nearestSeg(g.x, g.z);
@@ -566,6 +582,8 @@ class RoadsModule {
         break;
       }
     }
+    const blocker = this.#blockedBy([pad, ...corners], 0.2);
+    if (blocker) problems.push(`會壓到${blocker}`);
     const props = this.game.world.scenery.query((x, z, r) => this.#near(pad, { x, z }, 0.9 + r * 0.5));
     const cost = ROAD_COST.stop + props.reduce((s, p) => s + (ROAD_COST[p.kind] ?? 0), 0);
     if (!problems.length && cost > this.game.money.get()) problems.push('資金不足');
@@ -595,6 +613,8 @@ class RoadsModule {
     this.game.world.scenery.remove(plan.props);
     const stop = this.traffic.addStop(plan.seg, plan.s, plan.side);
     this.game.money.float(`-${money(plan.cost)}`, stop.pos.clone().setY(1));
+    this.#redraw();
+    this.#registerLamps();
     this.save();
     this.#previewStop();
     if (this.traffic.stops.length === 2 && !this.traffic.buses.length) {
@@ -804,8 +824,8 @@ class RoadsModule {
     this.fleet = { ...DEFAULT_FLEET, ...(data.fleet ?? {}) };
     this.custom = (data.custom ?? []).filter((c) => VEHICLE_MODELS[c.base]);
     this.net.rebuild();
-    this.#redraw();
     for (const st of data.stops ?? []) if (segs[st.seg]) this.traffic.addStop(segs[st.seg], st.s, st.side, st.name);
+    this.#redraw();
     this.traffic.networkChanged();
     this.loading = false;
     for (let i = 0; i < 20; i++) this.#syncFleet(true);

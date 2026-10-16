@@ -149,9 +149,10 @@ function pieces(line, a, b, gaps) {
   return runs.map(([r0, r1]) => line.slice(r0, r1));
 }
 
+// stops: bus stop positions, kept clear of lamps.
 // rails: polylines of railway track; sidewalks and lamps make way for
 // level crossings.
-export function buildRoadMeshes(net, rails = []) {
+export function buildRoadMeshes(net, rails = [], stops = []) {
   const geos = { asphalt: [], disk: [], yellow: [], white: [], walk: [], kerb: [] };
   const lamps = [];
 
@@ -210,6 +211,8 @@ export function buildRoadMeshes(net, rails = []) {
       if (gaps.some(([g0, g1]) => s > g0 - 0.6 && s < g1 + 0.6)) continue;
       const t = line.tangentAt(s);
       const side = new THREE.Vector3().crossVectors(t, UP).normalize().multiplyScalar(k % 2 ? 1 : -1);
+      const at = p.clone().addScaledVector(side, ROAD_HALF + WALK);
+      if (stops.some((q) => q.distanceTo(at) < 1.5)) continue;
       lamps.push({ p: p.clone().addScaledVector(side, ROAD_HALF + WALK - 0.07), toward: side.clone().negate() });
     }
   }

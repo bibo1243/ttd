@@ -69,7 +69,7 @@ export function mesh(geo, material, x = 0, y = 0, z = 0) {
 }
 
 export const rbox = (w, h, d, r, material, x, y, z) =>
-  mesh(new RoundedBoxGeometry(w, h, d, 3, Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4)), material, x, y, z);
+  mesh(new RoundedBoxGeometry(w, h, d, 2, Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4)), material, x, y, z);
 
 // A thin tube from a to b.
 export function rod(a, b, radius, material, segments = 8) {
