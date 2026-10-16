@@ -76,7 +76,18 @@ export class Train {
     }
     for (const v of this.vehicles) this.scene.remove(v.group);
     this.vehicles = [this.head, ...this.mids, ...(this.tail ? [this.tail] : [])];
-    for (const v of this.vehicles) this.scene.add(v.group);
+    for (const v of this.vehicles) {
+      v.group.visible = !!this.track;
+      this.scene.add(v.group);
+    }
+  }
+
+  // Put the train on a (new) track, or take it off with null.
+  setTrack(track) {
+    this.track = track;
+    this.distance = 0;
+    this.speed = 0;
+    for (const v of this.vehicles) v.group.visible = !!track;
   }
 
   get lead() {
@@ -104,6 +115,7 @@ export class Train {
   }
 
   update(dt, time) {
+    if (!this.track) return;
     const step = this.speed * dt;
     this.distance += step;
     this.travelled += step;

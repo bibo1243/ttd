@@ -59,7 +59,7 @@ function put(scatter, part, root, x, y, z, sx = 1, sy = 1, sz = 1, color) {
 }
 
 function makeTree(rand, scatter, P, x, z) {
-  scatter.beginProp(x, z);
+  const prop = scatter.beginProp(x, z, 'tree', 0.45);
   const h = 0.5 + rand() * 0.5;
   const greens = [0x5fae5a, 0x4c9a52, 0x78c06a, 0x3f8a4f];
   const color = greens[Math.floor(rand() * greens.length)];
@@ -75,10 +75,11 @@ function makeTree(rand, scatter, P, x, z) {
   put(scatter, P.trunk, root, 0, 0, 0, 1, h, 1);
   if (pine) put(scatter, P.pine, root, 0, h, 0, 1, 1, 1, color);
   else put(scatter, P.ball, root, 0, h + 0.25, 0, radius, radius, radius, color);
+  return prop;
 }
 
 function makeHouse(rand, scatter, P, x, z) {
-  scatter.beginProp(x, z);
+  const prop = scatter.beginProp(x, z, 'house', 1.0);
   const walls = [0xf6e7cf, 0xfbd5c0, 0xdbe8f4, 0xf4f0d2];
   const roofs = [0xd65a4a, 0x4e7fb8, 0x6b4e3d, 0x3f8a6b];
   const w = 0.8 + rand() * 0.5;
@@ -95,10 +96,11 @@ function makeHouse(rand, scatter, P, x, z) {
   put(scatter, P.roof, root, 0, h + 0.22, 0, w * 0.78, 0.45, d * 0.78, roof);
   put(scatter, P.door, root, 0, 0.15, d / 2 + 0.01);
   for (const side of [-1, 1]) put(scatter, P.window, root, side * w * 0.28, h * 0.6, d / 2 + 0.01);
+  return prop;
 }
 
 function makeRock(rand, scatter, P, x, z) {
-  scatter.beginProp(x, z);
+  const prop = scatter.beginProp(x, z, 'rock', 0.3);
   const r = 0.15 + rand() * 0.2;
   const root = new THREE.Matrix4().compose(
     _p.set(x, 0.05, z),
@@ -106,6 +108,7 @@ function makeRock(rand, scatter, P, x, z) {
     _s.setScalar(r),
   );
   scatter.add(P.rock, root);
+  return prop;
 }
 
 // Clouds move, so they get one InstancedMesh whose puffs follow a light
@@ -142,7 +145,7 @@ function makeClouds(rand, scene, count) {
   return clouds;
 }
 
-export function buildWorld(scene, track, stations = [], opts = {}) {
+export function buildWorld(scene, opts = {}) {
   const rand = rng(20261016);
 
   // Island
@@ -165,53 +168,49 @@ export function buildWorld(scene, track, stations = [], opts = {}) {
   water.receiveShadow = true;
   scene.add(water);
 
-  // Keep scenery off the rails.
-  const trackPts = track.curve.getSpacedPoints(400);
-  const nearTrack = (x, z, r) => trackPts.some((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < r * r);
-
-  const isStation = (x, z) => stations.some((s) => s.contains(x, z, 1.2));
-
-  const obstacles = [];
+  // Scenery covers the whole island; the player clears it by building.
+  const obstacles = []; // houses and trees robots walk around
   const scatter = new Scatter();
   const P = sceneryParts(scatter);
-  const placeAt = (radiusMax, clearance, make, tries, footprint) => {
+  const props = [];
+  const free = (x, z, r) => props.every((p) => (p.x - x) ** 2 + (p.z - z) ** 2 > (p.r + r) ** 2);
+  const placeAt = (radiusMin, radiusMax, make, tries, footprint, blocks = true) => {
     for (let i = 0; i < tries; i++) {
       const a = rand() * Math.PI * 2;
-      const r = Math.sqrt(rand()) * radiusMax;
+      const r = Math.sqrt(radiusMin ** 2 + rand() * (radiusMax ** 2 - radiusMin ** 2));
       const x = Math.cos(a) * r;
       const z = Math.sin(a) * r;
-      if (nearTrack(x, z, clearance) || isStation(x, z)) continue;
-      make(rand, scatter, P, x, z);
-      obstacles.push({ x, z, r: footprint });
+      if (!free(x, z, footprint * 0.6)) continue;
+      const prop = make(rand, scatter, P, x, z);
+      props.push(prop);
+      if (blocks) obstacles.push(prop);
     }
   };
-  placeAt(16, 2.4, makeHouse, 14, 1.0);
-  placeAt(23, 1.3, makeTree, 140, 0.45);
-
-  // Rocks
-  for (let i = 0; i < 30; i++) {
-    const a = rand() * Math.PI * 2;
-    const r = 4 + rand() * 19;
-    const x = Math.cos(a) * r;
-    const z = Math.sin(a) * r;
-    if (nearTrack(x, z, 1.0) || isStation(x, z)) continue;
-    makeRock(rand, scatter, P, x, z);
-  }
+  placeAt(3, 17, makeHouse, 16, 1.0);
+  placeAt(0, 23, makeTree, 150, 0.45);
+  placeAt(4, 23, makeRock, 30, 0.3, false);
 
   if (opts.stress) buildStressLands(scene, rand, scatter, P);
   scene.add(scatter.build());
 
   // Clouds drift slowly; return them so main can animate.
   const clouds = makeClouds(rand, scene, 9);
-  // Clears trees, houses and rocks from ground the player builds on.
-  const clearArea = (x, z, r) => {
-    for (let i = obstacles.length - 1; i >= 0; i--) {
-      const o = obstacles[i];
-      if ((o.x - x) ** 2 + (o.z - z) ** 2 < r * r) obstacles.splice(i, 1);
-    }
-    return scatter.removeNear(x, z, r);
+  // Clearing ground for track and stations the player builds.
+  const scenery = {
+    // Standing props for which test(x, z, r) is true.
+    query: (test) => scatter.query((p) => test(p.x, p.z, p.r)),
+    // Remove the given props; returns them.
+    remove(list) {
+      const gone = scatter.remove(list);
+      for (const p of gone) {
+        const i = obstacles.indexOf(p);
+        if (i >= 0) obstacles.splice(i, 1);
+      }
+      return gone;
+    },
   };
-  return { clouds, obstacles, clearArea };
+  const clearArea = (x, z, r) => scenery.remove(scenery.query((px, pz) => (px - x) ** 2 + (pz - z) ** 2 < r * r)).length;
+  return { clouds, obstacles, scenery, clearArea };
 }
 
 // A big mainland around the island, packed with scenery. Only used with

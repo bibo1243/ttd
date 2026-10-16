@@ -19,15 +19,16 @@ export class Scatter {
     this.hideDistance = hideDistance;
     this.parts = [];
     this.chunks = new Map();
-    this.props = []; // {x, z, removed} per prop, so whole props can be removed later
+    this.props = []; // {x, z, r, kind, removed} per prop, so whole props can be removed later
     this.meshes = []; // {mesh, props: prop index per instance}
     this.prop = -1;
   }
 
   // Start a new prop (a tree, a house...) rooted at x, z. Parts added until
   // the next beginProp belong to it and are removed together.
-  beginProp(x, z) {
-    this.prop = this.props.push({ x, z, removed: false }) - 1;
+  beginProp(x, z, kind = 'prop', r = 0.4) {
+    this.prop = this.props.push({ x, z, r, kind, removed: false }) - 1;
+    return this.props[this.prop];
   }
 
   // low: geometry used far away (defaults to the same one); null drops the
@@ -97,17 +98,26 @@ export class Scatter {
     return root;
   }
 
+  // Props still standing for which test(prop) is true.
+  query(test) {
+    return this.props.filter((p) => !p.removed && test(p));
+  }
+
   // Remove every prop rooted within r of (x, z), e.g. to clear the ground for
   // newly built track. Returns how many props were removed.
   removeNear(x, z, r) {
+    return this.remove(this.query((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < r * r)).length;
+  }
+
+  // Hide whole props (all their parts). Returns the props removed.
+  remove(list) {
     const hit = new Set();
-    this.props.forEach((p, i) => {
-      if (!p.removed && (p.x - x) ** 2 + (p.z - z) ** 2 < r * r) {
-        p.removed = true;
-        hit.add(i);
-      }
-    });
-    if (!hit.size) return 0;
+    for (const p of list) {
+      if (p.removed) continue;
+      p.removed = true;
+      hit.add(this.props.indexOf(p));
+    }
+    if (!hit.size) return [];
     const zero = new THREE.Matrix4().makeScale(0, 0, 0);
     for (const { mesh, props } of this.meshes) {
       let changed = false;
@@ -119,6 +129,6 @@ export class Scatter {
       });
       if (changed) mesh.instanceMatrix.needsUpdate = true;
     }
-    return hit.size;
+    return [...hit].map((i) => this.props[i]);
   }
 }

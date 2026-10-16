@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Track } from './track.js';
 import { Train, TRAIN_TYPES } from './train.js';
 import { buildWorld } from './world.js';
-import { PassengerSystem, createStations } from './stations.js';
+import { PassengerSystem } from './stations.js';
+import { BuildController } from './build.js';
 import { params, setupPerf } from './perf.js';
 
 const app = document.getElementById('app');
@@ -27,7 +27,7 @@ scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.environmentIntensity = 0.35;
 
 const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 300);
-camera.position.set(20, 16, 22);
+camera.position.set(19, 25, 25);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 0);
@@ -52,20 +52,28 @@ sun.shadow.normalBias = 0.05;
 sun.shadow.radius = 3;
 scene.add(sun);
 
-const v = (x, z) => new THREE.Vector3(x, 0, z);
-const track = new Track([
-  v(10, -5), v(10, 0), v(10, 5), v(8.4, 9.2), v(5, 10.6), v(0, 10.6), v(-4.5, 10.6),
-  v(-7.5, 9), v(-10.5, 7), v(-12.5, 1), v(-11, -5.5), v(-7.5, -9.4),
-  v(-4.5, -10.5), v(0.5, -10.5), v(5.5, -10.5), v(8.8, -8.8),
-]);
-scene.add(track.group);
-
-const stations = createStations(scene, track);
-const { clouds, obstacles } = buildWorld(scene, track, stations, { stress: params.has('stress') });
+// The island starts empty of rails: the player lays track and builds stations.
+const world = buildWorld(scene, { stress: params.has('stress') });
+const { clouds } = world;
 if (params.has('stress')) controls.maxDistance = 160;
-const train = new Train(track, scene, 'steam');
-train.distance = 6;
-const passengers = new PassengerSystem(scene, track, train, stations, obstacles);
+const train = new Train(null, scene, 'steam');
+const passengers = new PassengerSystem(scene, train, world.obstacles);
+const $id = (id) => document.getElementById(id);
+const builder = new BuildController({
+  scene,
+  camera,
+  dom: renderer.domElement,
+  passengers,
+  world,
+  ui: {
+    tools: $id('tools'),
+    quick: $id('quick'),
+    card: $id('buildCard'),
+    cardTitle: $id('bcTitle'),
+    cardInfo: $id('bcInfo'),
+    cardActions: $id('bcActions'),
+  },
+});
 
 // HUD
 const $ = (id) => document.getElementById(id);
@@ -91,7 +99,7 @@ $('camera').addEventListener('click', (e) => {
   e.currentTarget.classList.toggle('on', follow);
   e.currentTarget.textContent = follow ? '🎥 自由視角' : '🎥 跟隨火車';
   if (follow) {
-    const p = train.lead.group.position;
+    const p = train.track ? train.lead.group.position : controls.target;
     camera.position.set(p.x + 6, p.y + 5, p.z + 6);
   }
 });
@@ -147,7 +155,23 @@ const renderStats = () => {
   $('status').textContent = passengers.statusText;
 };
 passengers.onChange(renderStats);
+builder.load();
 renderStats();
+shownMoney = passengers.money;
+$('money').textContent = $('miniMoney').textContent = `$${shownMoney.toLocaleString()}`;
+
+// Saved in this browser: on every build, every few seconds, and on leaving.
+setInterval(() => builder.save(), 5000);
+window.addEventListener('pagehide', () => builder.save());
+let resetArmed = null;
+$('reset').addEventListener('click', (e) => {
+  if (resetArmed) return builder.reset();
+  e.currentTarget.textContent = '再按一次確認';
+  resetArmed = setTimeout(() => {
+    resetArmed = null;
+    $('reset').textContent = '重新開始';
+  }, 2500);
+});
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -168,8 +192,9 @@ function simulate(dt, time) {
   train.update(dt, time);
   passengers.update(dt, time);
   if (shownMoney !== passengers.money) {
-    shownMoney += Math.max(1, Math.ceil((passengers.money - shownMoney) * dt * 6));
-    shownMoney = Math.min(shownMoney, passengers.money);
+    const diff = passengers.money - shownMoney;
+    const step = Math.max(1, Math.ceil(Math.abs(diff) * dt * 6));
+    shownMoney = Math.abs(diff) <= step ? passengers.money : shownMoney + Math.sign(diff) * step;
     $('money').textContent = $('miniMoney').textContent = `$${shownMoney.toLocaleString()}`;
   }
 }
@@ -181,7 +206,7 @@ function tick() {
   const time = simTime;
   simulate(dt, time);
 
-  if (follow) {
+  if (follow && train.track) {
     lastTarget.copy(controls.target);
     controls.target.lerp(train.lead.group.position, Math.min(1, dt * 4));
     camera.position.add(controls.target.clone().sub(lastTarget));
@@ -206,5 +231,5 @@ const fastForward = (seconds) => {
     simulate(1 / 30, simTime);
   }
 };
-window.__game = { train, camera, controls, passengers, stations, fastForward };
+window.__game = { train, camera, controls, passengers, builder, world, fastForward };
 window.__perf = { ...perf, bench: (n) => perf.bench(() => renderer.render(scene, camera), n) };

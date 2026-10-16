@@ -7,10 +7,37 @@ const UP = new THREE.Vector3(0, 1, 0);
 export class Track {
   constructor(controlPoints) {
     this.curve = new THREE.CatmullRomCurve3(controlPoints, true, 'centripetal', 0.5);
-    this.curve.arcLengthDivisions = 2000;
+    this.curve.arcLengthDivisions = Math.max(2000, controlPoints.length * 8);
     this.length = this.curve.getLength();
     this.group = new THREE.Group();
     this.#build();
+    // Points every ~0.1 units for nearest-point lookups.
+    const n = Math.ceil(this.length / 0.1);
+    this.samples = this.curve.getSpacedPoints(n).slice(0, n);
+  }
+
+  // Distance along the track of the point nearest to (x, z), and how far away it is.
+  nearest(x, z) {
+    let best = 0;
+    let bestD = Infinity;
+    this.samples.forEach((p, i) => {
+      const dd = (p.x - x) ** 2 + (p.z - z) ** 2;
+      if (dd < bestD) {
+        bestD = dd;
+        best = i;
+      }
+    });
+    return { d: (best / this.samples.length) * this.length, dist: Math.sqrt(bestD) };
+  }
+
+  dispose() {
+    this.group.removeFromParent();
+    this.group.traverse((o) => {
+      if (o.isMesh) {
+        o.geometry.dispose();
+        o.material.dispose();
+      }
+    });
   }
 
   // Position on the track at distance d (wraps around).

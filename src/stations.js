@@ -3,9 +3,9 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { Robot, randomLook } from './robots.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
-const PLATFORM_Y = 0.3;
-const PLATFORM_LEN = 8;
-const PLATFORM_X = 0.95; // platform centre, measured outward from the rails
+export const PLATFORM_Y = 0.3;
+export const PLATFORM_LEN = 8;
+export const PLATFORM_X = 0.95; // platform centre, measured outward from the rails
 const RAMP_Z = [-2.25, 2.25];
 
 const flat = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
@@ -20,10 +20,16 @@ function shadowed(o) {
   return o;
 }
 
-export const STATION_DEFS = [
-  { name: '森林站', color: 0x3f9b5f, at: [10, 0] },
-  { name: '湖畔站', color: 0x3a86d4, at: [0, 10.6] },
-  { name: '小鎮站', color: 0xe8893a, at: [0.5, -10.5] },
+// Names and roof colours handed out to stations as the player builds them.
+export const STATION_NAMES = [
+  { name: '森林站', color: 0x3f9b5f },
+  { name: '湖畔站', color: 0x3a86d4 },
+  { name: '小鎮站', color: 0xe8893a },
+  { name: '山丘站', color: 0x8e6cc8 },
+  { name: '花園站', color: 0xe46a9a },
+  { name: '港口站', color: 0x2fa6a0 },
+  { name: '果園站', color: 0xd8544a },
+  { name: '雲朵站', color: 0x6a8fd8 },
 ];
 
 // ---------- Text sprites ----------
@@ -90,7 +96,7 @@ class StationLabel {
   }
 }
 
-class FloatText {
+export class FloatText {
   constructor(text, color = '#f2a23a') {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
@@ -127,7 +133,7 @@ class FloatText {
 
 // ---------- Stations ----------
 
-function makePlatform(color) {
+export function makePlatform(color) {
   const g = new THREE.Group();
   const L = PLATFORM_LEN;
   const platform = new THREE.Mesh(new RoundedBoxGeometry(1.0, PLATFORM_Y, L, 2, 0.05), flat(0xd9d2c5));
@@ -170,21 +176,21 @@ function makePlatform(color) {
   return shadowed(g);
 }
 
-class Station {
-  constructor(index, def, track) {
-    this.index = index;
+export class Station {
+  // side: +1 or -1, which side of the rails (relative to the direction of
+  // travel) the platform stands on.
+  constructor(def, track, d, side = 1) {
     this.name = def.name;
     this.color = def.color;
-    this.d = nearestDistance(track, def.at[0], def.at[1]);
+    this.def = def;
+    this.d = d;
+    this.side = side;
     this.waiting = [];
 
-    const p = track.pointAt(this.d);
-    const t = track.tangentAt(this.d);
     this.group = makePlatform(def.color);
-    this.group.position.copy(p);
-    this.group.rotation.y = Math.atan2(t.x, t.z);
+    placePlatform(this.group, track, d, side);
     this.group.updateMatrixWorld(true);
-    this.outward = new THREE.Vector3().crossVectors(t, UP).normalize().negate();
+    this.outward = new THREE.Vector3(1, 0, 0).applyQuaternion(this.group.quaternion);
     this.label = new StationLabel(def.name, def.color);
     this.label.sprite.position.copy(this.local(PLATFORM_X, 2.1, 0));
   }
@@ -222,34 +228,41 @@ class Station {
   }
 
   contains(x, z, margin) {
-    const v = this.group.worldToLocal(new THREE.Vector3(x, 0, z));
-    return v.x > -0.6 - margin && v.x < PLATFORM_X + 0.6 + margin && Math.abs(v.z) < PLATFORM_LEN / 2 + margin;
+    return platformContains(this.group, x, z, margin);
+  }
+
+  // Tint the station, e.g. red while the demolish tool hovers it.
+  highlight(color) {
+    this.group.traverse((o) => {
+      if (o.isMesh) o.material.emissive?.set(color ?? 0x000000);
+    });
+  }
+
+  dispose() {
+    this.group.removeFromParent();
+    this.label.sprite.removeFromParent();
+    this.group.traverse((o) => {
+      if (o.isMesh) {
+        o.geometry.dispose();
+        o.material.dispose();
+      }
+    });
+    this.label.texture.dispose();
+    this.label.sprite.material.dispose();
   }
 }
 
-function nearestDistance(track, x, z) {
-  let best = 0;
-  let bestD = Infinity;
-  const p = new THREE.Vector3();
-  const n = 1000;
-  for (let i = 0; i < n; i++) {
-    const d = (i / n) * track.length;
-    track.pointAt(d, p);
-    const dd = (p.x - x) ** 2 + (p.z - z) ** 2;
-    if (dd < bestD) {
-      bestD = dd;
-      best = d;
-    }
-  }
-  return best;
+// Stand a platform group beside the track at distance d.
+export function placePlatform(group, track, d, side) {
+  const p = track.pointAt(d);
+  const t = track.tangentAt(d);
+  group.position.copy(p);
+  group.rotation.y = Math.atan2(t.x, t.z) + (side > 0 ? 0 : Math.PI);
 }
 
-export function createStations(scene, track) {
-  return STATION_DEFS.map((def, i) => {
-    const s = new Station(i, def, track);
-    scene.add(s.group, s.label.sprite);
-    return s;
-  });
+export function platformContains(group, x, z, margin) {
+  const v = group.worldToLocal(new THREE.Vector3(x, 0, z));
+  return v.x > -0.6 - margin && v.x < PLATFORM_X + 0.6 + margin && Math.abs(v.z) < PLATFORM_LEN / 2 + margin;
 }
 
 // ---------- Passenger flow ----------
@@ -257,29 +270,52 @@ export function createStations(scene, track) {
 const MAX_WAITING = 10;
 const BOARD_INTERVAL = 0.22;
 const MIN_DWELL = 1.4;
+const RESIDENTS_START = 8;
+const RESIDENTS_PER_STATION = 6;
+export const START_MONEY = 5000;
+
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
 
 export class PassengerSystem {
-  constructor(scene, track, train, stations, obstacles = []) {
+  constructor(scene, train, obstacles = []) {
     this.scene = scene;
-    this.track = track;
     this.train = train;
-    this.stations = [...stations].sort((a, b) => a.d - b.d);
-    this.robots = new Set(); // robots visible in the world
+    this.track = null;
+    this.stations = [];
+    this.robots = new Set(); // every resident on the island
     this.onboard = [];
     this.transit = new Set();
     this.floaters = [];
-    this.money = 0;
+    this.money = START_MONEY;
     this.delivered = 0;
     this.state = 'running';
-    this.next = this.#nearestAhead();
+    this.next = 0;
     this.listeners = [];
-    this.trackPts = track.curve.getSpacedPoints(500);
+    this.trackPts = [];
     this.obstacles = obstacles;
-    this.#populate();
+    this.looks = 0;
+    this.#spawnResidents(RESIDENTS_START, null);
   }
 
   get residents() {
     return this.robots.size;
+  }
+
+  // True while a train is stopped at a station; building waits for it.
+  get busy() {
+    return this.state !== 'running';
+  }
+
+  spend(amount) {
+    if (amount > this.money) return false;
+    this.money -= amount;
+    this.#emit();
+    return true;
+  }
+
+  earn(amount) {
+    this.money += amount;
+    this.#emit();
   }
 
   // Ground is walkable away from the rails, platforms, trees and houses.
@@ -290,26 +326,49 @@ export class PassengerSystem {
     return !this.obstacles.some((o) => (o.x - x) ** 2 + (o.z - z) ** 2 < o.r * o.r);
   };
 
-  // A fixed population: some wait on the platforms, the rest are out strolling.
-  #populate() {
-    let i = 0;
+  #wanderNear(p) {
+    for (let i = 0; i < 30; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 1.5 + Math.random() * 3;
+      const x = p.x + Math.cos(a) * r;
+      const z = p.z + Math.sin(a) * r;
+      if (this.#isFree(x, z)) return new THREE.Vector3(x, 0, z);
+    }
+    // Drift back toward the middle of the island if boxed in.
+    return new THREE.Vector3(p.x * 0.85, 0, p.z * 0.85);
+  }
+
+  #nearestStation(p) {
+    let best = null;
     for (const s of this.stations) {
-      for (let k = 0; k < 7; k++) {
-        const r = new Robot(randomLook(i++));
-        this.robots.add(r);
-        this.scene.add(r.mesh);
-        if (k < 3) {
-          this.#chooseTrip(r, s);
-          r.mesh.position.copy(s.waitingSpot(s.waiting.length));
-          s.waiting.push(r);
-          this.#faceTrack(r, s);
-        } else {
-          r.mesh.position.copy(s.wanderPoint(this.#isFree));
-          r.mesh.rotation.y = Math.random() * Math.PI * 2;
-          this.#stroll(r, s, 1 + Math.floor(Math.random() * 3));
-        }
+      if (!best || s.group.position.distanceToSquared(p) < best.group.position.distanceToSquared(p)) best = s;
+    }
+    return best;
+  }
+
+  // New residents step out of a house (or arrive from the shore) and either
+  // head for `station` or wander about.
+  #spawnResidents(n, station) {
+    const houses = this.obstacles.filter((o) => o.kind === 'house');
+    for (let k = 0; k < n; k++) {
+      const r = new Robot(randomLook(this.looks++));
+      let start = null;
+      const near = station
+        ? houses.slice().sort((a, b) => station.group.position.distanceToSquared(new THREE.Vector3(a.x, 0, a.z)) - station.group.position.distanceToSquared(new THREE.Vector3(b.x, 0, b.z))).slice(0, 3)
+        : houses;
+      for (let i = 0; i < 20 && !start; i++) {
+        const h = near.length ? pick(near) : null;
+        const a = Math.random() * Math.PI * 2;
+        const p = h
+          ? new THREE.Vector3(h.x + Math.cos(a) * (h.r + 0.25), 0, h.z + Math.sin(a) * (h.r + 0.25))
+          : new THREE.Vector3(Math.cos(a) * 20, 0, Math.sin(a) * 20);
+        if (this.#isFree(p.x, p.z)) start = p;
       }
-      s.label.draw(s.waiting.length);
+      r.mesh.position.copy(start ?? new THREE.Vector3((Math.random() - 0.5) * 4, 0, (Math.random() - 0.5) * 4));
+      r.mesh.rotation.y = Math.random() * Math.PI * 2;
+      this.robots.add(r);
+      this.scene.add(r.mesh);
+      this.#stroll(r, station, station ? Math.floor(Math.random() * 2) : 1 + Math.floor(Math.random() * 3));
     }
   }
 
@@ -319,30 +378,139 @@ export class PassengerSystem {
     r.setDestination(others[Math.floor(Math.random() * others.length)]);
   }
 
-  // Walk between a few spots near a station, pausing to look around.
+  // Walk between a few spots (near a station, or wherever the robot is),
+  // pausing to look around, then head for a platform.
   #stroll(r, s, legs) {
     r.state = 'strolling';
     r.home = s;
+    r.target = null;
     r.setDestination(null);
     r.speed = 0.55 + Math.random() * 0.25;
     const step = (left) => {
-      if (left <= 0) return this.#headToPlatform(r, s);
-      r.walkTo([s.wanderPoint(this.#isFree)], () => r.wait(1.5 + Math.random() * 3.5, () => step(left - 1)));
+      if (left <= 0) return this.#headToPlatform(r, r.home);
+      const home = r.home && this.stations.includes(r.home) ? r.home : null;
+      const spot = home ? home.wanderPoint(this.#isFree) : this.#wanderNear(r.mesh.position);
+      r.walkTo([spot], () => r.wait(1.5 + Math.random() * 3.5, () => step(left - 1)));
     };
     step(legs);
   }
 
   #headToPlatform(r, s) {
+    if (!s || !this.stations.includes(s)) s = this.#nearestStation(r.mesh.position);
+    // Trips need somewhere to go: with fewer than two stations, keep strolling.
+    if (!s || this.stations.length < 2) return this.#stroll(r, s, 2);
     if (s.waiting.length >= MAX_WAITING) return this.#stroll(r, s, 1);
     r.state = 'returning';
+    r.target = s;
     r.speed = 0.9 + Math.random() * 0.2;
     const ramp = s.ramp(r.mesh.position);
     r.walkTo([ramp.bottom, ramp.top], () => {
+      r.target = null;
       this.#chooseTrip(r, s);
       r.state = 'waiting';
       s.waiting.push(r);
       this.#regroup(s);
     });
+  }
+
+  // Step down off a platform that is being demolished and wander off.
+  #leavePlatform(r, s) {
+    r.setDestination(null);
+    r.target = null;
+    r.state = 'leaving';
+    const p = r.mesh.position.clone().addScaledVector(s.outward, 1.6);
+    p.y = 0;
+    r.walkTo([p], () => this.#stroll(r, null, 2));
+  }
+
+  // A rider whose train lost its track or stations climbs out beside the car.
+  #dropRider(r) {
+    const v = r.vehicle;
+    if (r.seat) r.seat.robot = null;
+    const p = v
+      ? v.body.localToWorld(new THREE.Vector3((Math.random() < 0.5 ? -1 : 1) * (v.hw + 0.7), 0, r.seat?.pos.z ?? 0))
+      : r.mesh.getWorldPosition(new THREE.Vector3());
+    p.y = 0;
+    this.scene.attach(r.mesh);
+    r.mesh.position.copy(p);
+    r.vehicle = null;
+    r.seat = null;
+    r.transit = null;
+    r.boarding = false;
+    r.stand();
+    r.setIndoor(false);
+    this.#stroll(r, null, 2);
+  }
+
+  // ---------- Network changes from the build tools ----------
+
+  // Lay the train on a new track, or (null) demolish it along with every
+  // station. Returns false while a train is stopped at a platform.
+  setTrack(track) {
+    if (this.busy) return false;
+    if (!track) {
+      for (const s of [...this.stations]) this.removeStation(s);
+      for (const r of [...this.onboard]) this.#dropRider(r);
+      this.onboard = [];
+    }
+    this.track = track;
+    this.train.setTrack(track);
+    this.trackPts = track ? track.curve.getSpacedPoints(Math.ceil(track.length / 0.25)) : [];
+    this.state = 'running';
+    this.next = this.#nearestAhead();
+    this.#emit();
+    return true;
+  }
+
+  addStation(station) {
+    this.stations.push(station);
+    this.stations.sort((a, b) => a.d - b.d);
+    this.scene.add(station.group, station.label.sprite);
+    if (!this.busy) this.next = this.#nearestAhead();
+    this.#spawnResidents(RESIDENTS_PER_STATION, station);
+    // Residents already out strolling can now plan trips too.
+    this.#emit();
+  }
+
+  removeStation(s) {
+    if (this.busy) return false;
+    this.stations.splice(this.stations.indexOf(s), 1);
+    for (const r of s.waiting) this.#leavePlatform(r, s);
+    s.waiting = [];
+    for (const r of this.robots) {
+      if (r.state === 'returning' && r.target === s) this.#leavePlatform(r, s);
+      if (r.home === s) r.home = null;
+    }
+    // Anyone heading for the demolished station picks another destination.
+    for (const st of this.stations) {
+      for (const r of [...st.waiting]) {
+        if (r.dest !== s) continue;
+        const others = this.stations.filter((x) => x !== st);
+        if (others.length) r.setDestination(pick(others));
+        else {
+          st.waiting.splice(st.waiting.indexOf(r), 1);
+          this.#leavePlatform(r, st);
+        }
+      }
+      this.#regroup(st);
+    }
+    for (const r of [...this.onboard]) {
+      if (r.dest !== s) continue;
+      if (this.stations.length) r.setDestination(pick(this.stations));
+      else {
+        this.onboard.splice(this.onboard.indexOf(r), 1);
+        this.#dropRider(r);
+      }
+    }
+    s.dispose();
+    this.next = this.#nearestAhead();
+    this.#emit();
+    return true;
+  }
+
+  addFloater(f) {
+    this.scene.add(f.sprite);
+    this.floaters.push(f);
   }
 
   onChange(fn) {
@@ -354,10 +522,13 @@ export class PassengerSystem {
   }
 
   get capacity() {
-    return this.train.capacity;
+    return this.track ? this.train.capacity : 0;
   }
 
   get statusText() {
+    if (!this.track) return '先用「鐵路」工具鋪一條環狀鐵路';
+    if (!this.stations.length) return '在鐵路旁蓋車站，居民就會來搭車';
+    if (this.stations.length === 1) return '再蓋一個車站，乘客才有地方去';
     const s = this.stations[this.next];
     if (this.state !== 'running') return `停靠 ${this.current.name}・上下車中`;
     return `下一站 ${s.name}`;
@@ -377,6 +548,7 @@ export class PassengerSystem {
   }
 
   #nearestAhead() {
+    if (!this.track) return 0;
     let best = 0;
     let bestR = Infinity;
     this.stations.forEach((s, i) => {
@@ -462,13 +634,14 @@ export class PassengerSystem {
 
   #depart() {
     this.state = 'running';
-    this.next = (this.next + 1) % this.stations.length;
+    this.next = this.#nearestAhead();
     this.#emit();
   }
 
   // Called each frame before the train moves.
   control(dt) {
     const train = this.train;
+    if (!this.track || !this.stations.length) return;
     if (this.state === 'running') {
       const station = this.stations[this.next];
       const rem = this.#remaining(station);
@@ -506,13 +679,6 @@ export class PassengerSystem {
 
     for (const r of this.robots) {
       r.update(dt, time);
-      if (r.vanishing) {
-        r.scale -= dt * 4;
-        if (r.scale <= 0.05) {
-          r.mesh.removeFromParent();
-          this.robots.delete(r);
-        }
-      }
     }
     this.floaters = this.floaters.filter((f) => {
       const alive = f.update(dt);
@@ -642,16 +808,10 @@ export class PassengerSystem {
     this.#emit();
   }
 
-  #vanish(r) {
-    r.vanishing = true;
-  }
-
   // A rider with no seat left steps off at the nearest station and strolls.
   #release(r) {
-    const at = this.train.lead.group.position;
-    const s = this.current && this.state !== 'running'
-      ? this.current
-      : this.stations.reduce((a, b) => (b.group.position.distanceTo(at) < a.group.position.distanceTo(at) ? b : a));
+    const s = this.current && this.state !== 'running' ? this.current : null;
+    if (!s) return this.#dropRider(r);
     r.vehicle = null;
     r.seat = null;
     r.stand();

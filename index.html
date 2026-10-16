@@ -10,7 +10,7 @@
     <div id="app"></div>
     <div id="hud">
       <div class="title-row">
-        <div class="title">迷你交通大亨 <span>原型 0.4</span></div>
+        <div class="title">迷你交通大亨 <span>原型 0.5</span></div>
         <span class="mini-money" id="miniMoney">$0</span>
         <button id="collapse" class="icon" title="收合面板 (H)" aria-label="收合面板" aria-expanded="true">▾</button>
       </div>
@@ -37,7 +37,21 @@
         <button id="removeCar">－ 車廂</button>
         <span id="carCount" class="muted"></span>
       </div>
-      <div class="hint">拖曳旋轉・滾輪縮放・右鍵平移・H 收合面板</div>
+      <button id="reset" class="ghost">重新開始</button>
+      <div class="hint">拖曳旋轉・滾輪縮放・右鍵平移・H 收合面板・Esc 結束工具</div>
+      </div>
+    </div>
+    <div id="build">
+      <div id="buildCard" hidden>
+        <div id="bcTitle"></div>
+        <div id="bcInfo"></div>
+        <div id="bcActions"></div>
+      </div>
+      <div id="tools">
+        <button data-tool="track"><i>🛤️</i>鐵路</button>
+        <button data-tool="station"><i>🚉</i>車站</button>
+        <button data-tool="demolish"><i>🚧</i>拆除</button>
+        <button id="quick"><i>✨</i>範例路線</button>
       </div>
     </div>
     <script type="module" src="./src/main.js"></script>
