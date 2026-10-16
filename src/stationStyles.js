@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { sliceForPlanet } from './planet.js';
 
 // Station designs. Every platform's track-side edge sits 0.45 from the rail
 // centre; x grows outward from the rails, z runs along the track.
@@ -70,7 +71,9 @@ const tint = (color, roughness = 0.6) => {
 // ---------- Small helpers ----------
 
 function add(g, geo, mat, x, y, z, ry = 0) {
-  const m = new THREE.Mesh(geo, mat);
+  const sliced = sliceForPlanet(geo);
+  if (sliced !== geo) geo.dispose();
+  const m = new THREE.Mesh(sliced, mat);
   m.position.set(x, y, z);
   m.rotation.y = ry;
   g.add(m);
@@ -342,7 +345,7 @@ function buildGrand(g, s, color, name) {
     add(g, cyl(0.035, springY - y, 12), iron, x1, y + (springY - y) / 2, z);
     add(g, rbox(0.09, 0.06, 0.09, 0.01), iron, x0, 0.03, z);
   }
-  const glass = add(g, new THREE.CylinderGeometry(R - 0.005, R - 0.005, shedLen, 40, 1, true, Math.PI / 2, Math.PI), M.shedGlass, cx, springY, 0);
+  const glass = add(g, new THREE.CylinderGeometry(R - 0.005, R - 0.005, shedLen, 40, 20, true, Math.PI / 2, Math.PI), M.shedGlass, cx, springY, 0);
   glass.rotation.x = Math.PI / 2;
   glass.rotation.y = 0;
   glass.renderOrder = 2;

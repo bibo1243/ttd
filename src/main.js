@@ -9,6 +9,9 @@ import { params, setupPerf } from './perf.js';
 import { batcher } from './batching.js';
 import { MODULES } from './modules.js';
 import { Look } from './render.js';
+import { installPlanet, setPlanetCentre } from './planet.js';
+
+installPlanet();
 
 const app = document.getElementById('app');
 
@@ -213,6 +216,7 @@ function tick() {
     renderStats();
   }
   for (const m of MODULES) m.frame?.(dt);
+  setPlanetCentre(controls.target.x, controls.target.z);
   controls.update();
   look.render(frameTime);
   perf.frame();

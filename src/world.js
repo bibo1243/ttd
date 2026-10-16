@@ -151,18 +151,22 @@ export function buildWorld(scene, opts = {}) {
   const rand = rng(20261016);
 
   // Island
-  const islandGeo = new THREE.CylinderGeometry(24, 25.5, 1.2, 48, 1);
-  const island = new THREE.Mesh(islandGeo, flat(0x8fcf6e));
+  // The grass top is finely divided so it can follow the planet's curve.
+  const grass = flat(0x8fcf6e);
+  const island = new THREE.Mesh(new THREE.CylinderGeometry(24, 25.5, 1.2, 96, 1, true), grass);
   island.position.y = -0.6;
   island.receiveShadow = true;
   scene.add(island);
-  const cliff = new THREE.Mesh(new THREE.CylinderGeometry(25.5, 26.5, 1.2, 48, 1, true), flat(0xc9a77a));
+  const top = new THREE.Mesh(new THREE.RingGeometry(0, 24, 96, 32).rotateX(-Math.PI / 2), grass);
+  top.receiveShadow = true;
+  scene.add(top);
+  const cliff = new THREE.Mesh(new THREE.CylinderGeometry(25.5, 26.5, 1.2, 96, 1, true), flat(0xc9a77a));
   cliff.position.y = -1.6;
   scene.add(cliff);
 
   // Water
   const water = new THREE.Mesh(
-    new THREE.CircleGeometry(200, 64),
+    new THREE.RingGeometry(0, 200, 96, 60),
     new THREE.MeshStandardMaterial({ color: 0x6cc3e0, roughness: 0.25, metalness: 0.1 }),
   );
   water.rotation.x = -Math.PI / 2;

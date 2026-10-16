@@ -30,12 +30,16 @@ npm run build    # 輸出到 dist/
 ## 結構
 
 - `src/main.js`：場景、燈光、相機與操作面板
-- `src/track.js`：封閉軌道（道碴、枕木、鋼軌）與沿軌道取點
+- `src/network.js`：鐵路網（節點與彎道、分岔、號誌閉塞、尋路）
 - `src/train.js`：列車編組、車種設定（容量、速度）、蒸汽
 - `src/parts.js`：共用材質、輪軸、車身放樣（loft），以及開窗車身與座椅內裝（buildCabin）
 - `src/steam.js`：蒸汽火車頭與客車廂
 - `src/modern.js`：高鐵與路面電車
-- `src/build.js`：建造工具（鋪鐵路、蓋車站、拆除、費用、存檔）
+- `src/build.js`：建造工具（鋪鐵路、蓋車站、路線、買賣列車、拆除、費用、存檔）
+- `src/stationStyles.js`：三種車站造型（小站、一般站、大車站）
+- `src/residents.js`：居民的名字與個性
+- `src/planet.js`：星球弧形地平線（頂點著色器彎曲，網址加 `?flat` 可關閉）
+- `src/modules.js`：功能模組（住家、商店…）掛進遊戲的地方
 - `src/stations.js`：車站、居民行程（散步、候車、上下車）與收入
 - `src/robots.js`：機器人模型、穿著、隨身物品與列車長
 - `src/world.js`：小島、樹、房子、雲

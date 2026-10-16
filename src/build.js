@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { arcCurve, joinCurve, minRadius, straightCurve } from './network.js';
 import { FloatText, STATION_NAMES, STATION_STYLES, Station, makePlatform, placePlatform } from './stations.js';
 import { Train, TRAIN_TYPES } from './train.js';
+import { rayToGround, straightenRay } from './planet.js';
 
 // Prices. Building on occupied ground also pays to clear what stands there.
 export const COST = { track: 12, station: 600, train: 1500, tree: 15, house: 150, rock: 5 };
@@ -198,7 +199,7 @@ export class BuildController {
 
   #groundAt(e) {
     this.raycaster.setFromCamera(this.#ndc(e), this.camera);
-    return this.raycaster.ray.intersectPlane(this.ground, new THREE.Vector3());
+    return rayToGround(this.raycaster.ray);
   }
 
   #hover(e) {
@@ -692,6 +693,7 @@ export class BuildController {
 
   #pick(e) {
     this.raycaster.setFromCamera(this.#ndc(e), this.camera);
+    straightenRay(this.raycaster.ray);
     const targets = [];
     for (const t of this.trains) for (const v of t.vehicles) targets.push([v.group, t]);
     for (const r of this.passengers.robots) targets.push([r.mesh, r]);
