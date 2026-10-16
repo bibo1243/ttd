@@ -5,7 +5,7 @@ import { Train, TRAIN_TYPES } from './train.js';
 import { rayToGround, straightenRay } from './planet.js';
 
 // Prices. Building on occupied ground also pays to clear what stands there.
-export const COST = { track: 12, station: 600, train: 1500, tree: 15, house: 150, rock: 5 };
+export const COST = { track: 10, station: 600, train: 1500, tree: 15, house: 150, rock: 5 };
 const KIND_LABEL = { tree: '棵樹', house: '間房子', rock: '顆石頭' };
 const LINE_COLORS = [0xe8504a, 0x3a86d4, 0x3fae5f, 0xf2a33a, 0x8e6cc8, 0x2fa6a0, 0xe46a9a, 0x6b7f99];
 
@@ -80,10 +80,31 @@ export class BuildController {
   }
 
   #changed() {
+    this.#firstTrain();
     for (const fn of this.listeners) fn(this);
     this.#refreshTools();
     this.#renderLines();
     this.save();
+  }
+
+  // The first line with two stations gets a train for free, so a new
+  // player sees something run before they have to save up.
+  #firstTrain() {
+    if (this.loading || this.gaveTrain || this.trains.length) return;
+    const line = this.lines.find((l) => l.stations.length >= 2);
+    if (!line) return;
+    this.gaveTrain = true;
+    const t = this.buyTrain(line, true);
+    if (t) {
+      this.firstTrainNote = t;
+      this.#card('第一台列車', `送你一台免費的${TRAIN_TYPES[t.type].label}，已經停在${t.current?.name ?? '車站'}，開始載客了！之後可以在左邊面板的路線旁按「＋」加開列車（每台 ${money(COST.train)}）。`, [
+        { label: '好', primary: true, run: () => {
+          this.firstTrainNote = null;
+          this.#card(null);
+          if (this.tool === 'station') this.#stationCard();
+        } },
+      ]);
+    }
   }
 
   get stations() {
@@ -502,6 +523,7 @@ export class BuildController {
   }
 
   #previewStation() {
+    if (this.firstTrainNote) return; // leave the free-train card up until dismissed
     for (const g of Object.values(this.stationGhosts)) g.visible = false;
     this.plan = this.#planStation(this.pointer);
     if (!this.plan) return this.#stationCard();
@@ -519,8 +541,9 @@ export class BuildController {
 
   #clickStation() {
     if (!this.plan?.ok) return;
+    this.firstTrainNote = null;
     this.#buildStation(this.plan, this.#nextName(), true);
-    this.#previewStation();
+    if (!this.firstTrainNote) this.#previewStation();
   }
 
   #buildStation(plan, def, pay) {
@@ -537,7 +560,6 @@ export class BuildController {
       if (auto) {
         auto.stations.push(s);
         this.passengers.setLines(this.lines);
-        if (auto.stations.length === 2 && !this.trains.length) this.buyTrain(auto);
       }
     }
     this.#changed();
@@ -609,14 +631,14 @@ export class BuildController {
     this.#editLine((l) => l.stations.push(s));
   }
 
-  buyTrain(line) {
+  buyTrain(line, free = false) {
     if (this.trains.length >= MAX_TRAINS) return this.#toast(`最多 ${MAX_TRAINS} 台列車`);
     if (line.stations.length < 2) return this.#toast('路線至少要有兩個車站');
-    if (!this.passengers.spend(COST.train)) return this.#toast('資金不足');
+    if (!free && !this.passengers.spend(COST.train)) return this.#toast(`買一台列車要 ${money(COST.train)}，資金不足`);
     const t = new Train(this.scene, this.network, this.newType);
     t.line = line;
     this.passengers.addTrain(t);
-    if (this.passengers.placeTrain(t)) this.#float(`-${money(COST.train)}`, t.position.clone().setY(1.2));
+    if (this.passengers.placeTrain(t) && !free) this.#float(`-${money(COST.train)}`, t.position.clone().setY(1.2));
     this.#changed();
     return t;
   }
@@ -852,6 +874,7 @@ export class BuildController {
       lines: this.lines.map((l) => ({ name: l.name, color: l.color, auto: l.auto, stations: l.stations.map((s) => sIndex.get(s)) })),
       trains: this.trains.map((t) => ({ line: this.lines.indexOf(t.line), type: t.type, mids: t.mids.length })),
       money: this.passengers.money,
+      gaveTrain: !!this.gaveTrain,
       delivered: this.passengers.delivered,
     };
     try {
@@ -883,6 +906,7 @@ export class BuildController {
       this.editing = this.lines[0] ?? null;
       this.passengers.setLines(this.lines);
       if (Number.isFinite(data.money)) this.passengers.money = data.money;
+      this.gaveTrain = !!data.gaveTrain;
       if (Number.isFinite(data.delivered)) this.passengers.delivered = data.delivered;
       for (const td of data.trains ?? []) {
         const line = this.lines[td.line];

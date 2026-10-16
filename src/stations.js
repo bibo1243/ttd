@@ -266,7 +266,7 @@ const BOARD_INTERVAL = 0.22;
 const MIN_DWELL = 1.4;
 const SKIP_AFTER = 8; // seconds held at a red signal before skipping a stop
 export const RESIDENTS = 100;
-export const START_MONEY = 5000;
+export const START_MONEY = 8000;
 const ROBOT_R = 0.1;
 
 const pick = (list) => list[Math.floor(Math.random() * list.length)];
