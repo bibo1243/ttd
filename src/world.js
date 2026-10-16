@@ -90,31 +90,7 @@ function makeCloud(rand) {
   return g;
 }
 
-function makeStation() {
-  const g = new THREE.Group();
-  const platform = new THREE.Mesh(new RoundedBoxGeometry(1.0, 0.3, 4.2, 2, 0.05), flat(0xd9d2c5));
-  platform.position.y = 0.15;
-  g.add(platform);
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.02, 4.1), flat(0xf2c14e));
-  edge.position.set(-0.44, 0.31, 0);
-  g.add(edge);
-  const pillarGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.8, 8);
-  for (const z of [-1.4, 0, 1.4]) {
-    const p = new THREE.Mesh(pillarGeo, flat(0xf4efe6));
-    p.position.set(0.25, 0.7, z);
-    g.add(p);
-  }
-  const roof = new THREE.Mesh(new RoundedBoxGeometry(1.1, 0.1, 3.6, 2, 0.04), flat(0xd65a4a));
-  roof.position.set(0.1, 1.12, 0);
-  roof.rotation.z = 0.12;
-  g.add(roof);
-  const bench = new THREE.Mesh(new RoundedBoxGeometry(0.2, 0.12, 0.7, 2, 0.03), flat(0x8b5a3c));
-  bench.position.set(0.3, 0.38, 0.7);
-  g.add(bench);
-  return shadowed(g);
-}
-
-export function buildWorld(scene, track) {
+export function buildWorld(scene, track, stations = []) {
   const rand = rng(20261016);
 
   // Island
@@ -141,12 +117,7 @@ export function buildWorld(scene, track) {
   const trackPts = track.curve.getSpacedPoints(400);
   const nearTrack = (x, z, r) => trackPts.some((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < r * r);
 
-  // Station beside the straight on the +x side.
-  const station = makeStation();
-  const sp = track.pointAt(0);
-  station.position.set(sp.x + 0.95, 0, sp.z);
-  scene.add(station);
-  const isStation = (x, z) => Math.abs(x - station.position.x) < 1.8 && Math.abs(z - station.position.z) < 3;
+  const isStation = (x, z) => stations.some((s) => s.contains(x, z, 1.2));
 
   const placeAt = (radiusMax, clearance, make, tries) => {
     for (let i = 0; i < tries; i++) {
@@ -169,7 +140,7 @@ export function buildWorld(scene, track) {
     const r = 4 + rand() * 19;
     const x = Math.cos(a) * r;
     const z = Math.sin(a) * r;
-    if (nearTrack(x, z, 1.0)) continue;
+    if (nearTrack(x, z, 1.0) || isStation(x, z)) continue;
     const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.15 + rand() * 0.2, 0), flat(0xa7a9ac));
     rock.position.set(x, 0.05, z);
     rock.rotation.set(rand(), rand(), rand());

@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Track } from './track.js';
-import { Train } from './train.js';
+import { Train, TRAIN_TYPES } from './train.js';
 import { buildWorld } from './world.js';
+import { PassengerSystem, createStations } from './stations.js';
 
 const app = document.getElementById('app');
 
@@ -52,14 +53,16 @@ scene.add(sun);
 
 const v = (x, z) => new THREE.Vector3(x, 0, z);
 const track = new Track([
-  v(10, 0), v(10, 6), v(7, 10), v(1, 10), v(-3, 6), v(-7, 8), v(-11, 5),
-  v(-12, -1), v(-9, -7), v(-3, -9), v(4, -10), v(9, -7), v(10, -4),
+  v(10, -4), v(10, 0), v(10, 4), v(8.2, 8.6), v(4.5, 10), v(-1.5, 10), v(-4.5, 7.6),
+  v(-7.5, 8.6), v(-11, 6), v(-12.5, 0), v(-10, -6), v(-5, -9.6), v(0, -10), v(5, -10), v(8.6, -8),
 ]);
 scene.add(track.group);
 
-const { clouds } = buildWorld(scene, track);
-const train = new Train(track, scene, 4);
+const stations = createStations(scene, track);
+const { clouds } = buildWorld(scene, track, stations);
+const train = new Train(track, scene, 'steam');
 train.distance = 6;
+const passengers = new PassengerSystem(scene, track, train, stations);
 
 // HUD
 const $ = (id) => document.getElementById(id);
@@ -69,7 +72,7 @@ let savedSpeed = train.speed;
 
 const speedInput = $('speed');
 const speedOut = $('speedOut');
-const updateCount = () => ($('carCount').textContent = `${train.carCount} 節車廂`);
+const updateCount = () => ($('carCount').textContent = `共 ${train.carCount} 節`);
 updateCount();
 
 speedInput.addEventListener('input', () => {
@@ -85,18 +88,44 @@ $('camera').addEventListener('click', (e) => {
   e.currentTarget.classList.toggle('on', follow);
   e.currentTarget.textContent = follow ? '🎥 自由視角' : '🎥 跟隨火車';
   if (follow) {
-    const p = train.loco.group.position;
+    const p = train.lead.group.position;
     camera.position.set(p.x + 6, p.y + 5, p.z + 6);
   }
 });
+const typeBar = $('types');
+for (const [key, t] of Object.entries(TRAIN_TYPES)) {
+  const btn = document.createElement('button');
+  btn.textContent = t.label;
+  btn.dataset.type = key;
+  btn.classList.toggle('on', key === train.type);
+  btn.addEventListener('click', () => {
+    train.setType(key);
+    passengers.trimToCapacity();
+    for (const b of typeBar.children) b.classList.toggle('on', b.dataset.type === key);
+    updateCount();
+  });
+  typeBar.appendChild(btn);
+}
 $('addCar').addEventListener('click', () => {
   train.addCar();
   updateCount();
+  passengers.trimToCapacity();
 });
 $('removeCar').addEventListener('click', () => {
   train.removeCar();
   updateCount();
+  passengers.trimToCapacity();
 });
+
+// Earnings panel. Money counts up smoothly toward the real total.
+let shownMoney = 0;
+const renderStats = () => {
+  $('riders').textContent = `${passengers.onboard.length} / ${passengers.capacity}`;
+  $('delivered').textContent = passengers.delivered;
+  $('status').textContent = passengers.statusText;
+};
+passengers.onChange(renderStats);
+renderStats();
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -107,19 +136,31 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 const lastTarget = new THREE.Vector3();
 
-function tick() {
-  const dt = Math.min(clock.getDelta(), 0.05);
-  const time = clock.elapsedTime;
-
+function simulate(dt, time) {
   // Ease toward the target speed so starts and stops feel weighty.
-  const target = running ? savedSpeed : 0;
+  const target = running ? savedSpeed * train.config.speedScale : 0;
   train.speed += (target - train.speed) * Math.min(1, dt * 1.5);
   if (Math.abs(train.speed) < 0.005) train.speed = 0;
+  passengers.control(dt);
   train.update(dt, time);
+  passengers.update(dt, time);
+  if (shownMoney !== passengers.money) {
+    shownMoney += Math.max(1, Math.ceil((passengers.money - shownMoney) * dt * 6));
+    shownMoney = Math.min(shownMoney, passengers.money);
+    $('money').textContent = `$${shownMoney.toLocaleString()}`;
+  }
+}
+
+let simTime = 0;
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  simTime += dt;
+  const time = simTime;
+  simulate(dt, time);
 
   if (follow) {
     lastTarget.copy(controls.target);
-    controls.target.lerp(train.loco.group.position, Math.min(1, dt * 4));
+    controls.target.lerp(train.lead.group.position, Math.min(1, dt * 4));
     camera.position.add(controls.target.clone().sub(lastTarget));
   }
 
@@ -134,4 +175,11 @@ function tick() {
 }
 tick();
 
-window.__game = { train, camera, controls };
+// Debug hook: run the game logic forward without rendering.
+const fastForward = (seconds) => {
+  for (let t = 0; t < seconds; t += 1 / 30) {
+    simTime += 1 / 30;
+    simulate(1 / 30, simTime);
+  }
+};
+window.__game = { train, camera, controls, passengers, stations, fastForward };
