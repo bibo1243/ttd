@@ -423,6 +423,9 @@ export class Robot {
     this.path = [];
     this.mesh.position.copy(seat.pos);
     this.mesh.rotation.y = 0;
+    // Items are carried on the right; mirror window-side riders so luggage
+    // sits toward the aisle instead of poking through the car wall.
+    this.mesh.userData.inner.scale.x = seat.pos.x > 0 ? -1 : 1;
     for (const leg of this.mesh.userData.legs) {
       leg.rotation.x = Math.PI / 2;
       leg.position.set(leg.position.x, 0.072, 0.055);
@@ -431,6 +434,7 @@ export class Robot {
 
   stand() {
     this.seated = false;
+    this.mesh.userData.inner.scale.x = 1;
     for (const leg of this.mesh.userData.legs) {
       leg.rotation.x = 0;
       leg.position.set(leg.position.x, 0.045, 0);

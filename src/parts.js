@@ -157,11 +157,50 @@ export function rod(a, b, radius, material) {
 
 // ---------- Cabins: hollow bodies with window and door openings ----------
 
+// Tinted glass with a soft top-to-bottom sheen and two diagonal glints, so
+// panes read as real glass even when nothing bright is reflected in them.
+function glassSheen() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const base = g.createLinearGradient(0, 0, 0, 128);
+  base.addColorStop(0, 'rgba(255,255,255,0.62)');
+  base.addColorStop(0.45, 'rgba(235,246,255,0.38)');
+  base.addColorStop(1, 'rgba(210,232,245,0.5)');
+  g.fillStyle = base;
+  g.fillRect(0, 0, 128, 128);
+  const streak = (x, w, a) => {
+    g.save();
+    g.translate(x, 0);
+    g.transform(1, 0, -0.55, 1, 0, 0);
+    const s = g.createLinearGradient(0, 0, w, 0);
+    s.addColorStop(0, 'rgba(255,255,255,0)');
+    s.addColorStop(0.5, `rgba(255,255,255,${a})`);
+    s.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = s;
+    g.fillRect(0, 0, w, 128);
+    g.restore();
+  };
+  streak(58, 30, 0.55);
+  streak(98, 12, 0.45);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+const sheen = typeof document !== 'undefined' ? glassSheen() : null;
+
 export const glassMat = new THREE.MeshPhysicalMaterial({
-  color: 0xdff1ff,
-  roughness: 0.04,
+  color: 0x9fcfe4,
+  map: sheen,
+  roughness: 0.03,
+  metalness: 0.1,
+  clearcoat: 1,
+  clearcoatRoughness: 0.02,
+  specularIntensity: 1,
+  envMapIntensity: 2.6,
   transparent: true,
-  opacity: 0.2,
+  opacity: 0.78,
   depthWrite: false,
   side: THREE.DoubleSide,
 });
@@ -304,7 +343,7 @@ export function buildCabin(v, o) {
       f.position.set(side * (xAtWin + 0.004), winCy, w.z);
       const g = new THREE.Mesh(new THREE.PlaneGeometry(w.w, winH), glassMat);
       g.rotation.y = Math.PI / 2;
-      g.position.set(side * xAtWin, winCy, w.z);
+      g.position.set(side * (xAtWin - 0.008), winCy, w.z);
       g.renderOrder = 2;
       v.body.add(f, g);
     }
