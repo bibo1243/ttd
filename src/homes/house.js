@@ -43,12 +43,14 @@ const phys = (color, o = {}) => {
   if (!cache.has(key)) cache.set(key, new THREE.MeshPhysicalMaterial({ color, roughness: 0.35, clearcoat: 0.5, clearcoatRoughness: 0.2, ...o }));
   return cache.get(key);
 };
+const shades = []; // every lamp shade material, brightened at night
 const lampLit = (color) => {
   const key = `lamp${color}`;
   if (!cache.has(key)) {
     const m = new THREE.MeshStandardMaterial({ color, emissive: 0xffb466, emissiveIntensity: 0.9, roughness: 0.6, side: THREE.DoubleSide });
     m.userData.noShadow = true;
     cache.set(key, m);
+    shades.push(m);
   }
   return cache.get(key);
 };
@@ -99,6 +101,14 @@ const paint = (c) => {
   if (!cache.has(key)) cache.set(key, new THREE.MeshStandardMaterial({ color: c, map: tex.stucco, roughness: 0.85 }));
   return cache.get(key);
 };
+
+// night: 0 (day) to 1. Lamp shades and the light pools they throw get
+// brighter after dark (the bulbs are driven by the lamp system).
+export function setHomesNight(night) {
+  for (const m of shades) m.emissiveIntensity = 0.9 + 1.1 * night;
+  M.glowPool.opacity = 0.55 + 0.4 * night;
+}
+export const bulbMaterial = M.bulb;
 
 // ---------- Shared geometry ----------
 

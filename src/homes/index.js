@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildHouse, W, D, SPOTS, ENTRY, THRESHOLD, DOORSTEP } from './house.js';
+import { buildHouse, setHomesNight, bulbMaterial, W, D, SPOTS, ENTRY, THRESHOLD, DOORSTEP } from './house.js';
 
 // Homes for the robot residents. The island's houses become furnished
 // cottages at robot scale; residents walk home now and then, open the
@@ -9,7 +9,7 @@ import { buildHouse, W, D, SPOTS, ENTRY, THRESHOLD, DOORSTEP } from './house.js'
 // Plugs into the game as a module (see ../modules.js); stations.js asks
 // `passengers.homes.maybeVisit()` between stroll stops.
 
-const LIGHTS = 4; // warm room lights shared by the homes nearest the camera
+const LIGHTS = 4; // own warm room lights, when the game has no lamp system
 const PEEK_DISTANCE = 6.5; // camera closer than this lifts the roof
 const BLOCK = 0.16; // how far outside the walls strolling robots are kept
 
@@ -50,7 +50,7 @@ class Home {
 }
 
 export class HomeSystem {
-  constructor({ scene, world, network, passengers }) {
+  constructor({ scene, world, network, passengers, look }) {
     this.scene = scene;
     this.world = world;
     this.network = network;
@@ -62,8 +62,19 @@ export class HomeSystem {
     this.#replaceHouses();
     this.#wrapScenery();
 
+    // Room lights: the game's lamp system lights the homes nearest the
+    // camera when it has one; otherwise a small pool of our own.
     this.lights = [];
-    for (let i = 0; i < LIGHTS; i++) {
+    if (look?.addLamp) {
+      for (const h of this.homes) {
+        const at = new THREE.Object3D();
+        at.position.set(-0.05, 0.62, 0);
+        h.group.add(at);
+        h.unlamp = look.addLamp(at, { color: 0xffb36b, intensity: 0.6, distance: 2.6, bulb: { material: bulbMaterial }, always: true });
+      }
+      look.onTime?.((night) => setHomesNight(night));
+    }
+    for (let i = 0; i < (look?.addLamp ? 0 : LIGHTS); i++) {
       const l = new THREE.PointLight(0xffb36b, 0, 2.6, 2);
       l.userData.home = null;
       scene.add(l);
@@ -120,6 +131,7 @@ export class HomeSystem {
   #demolish(home) {
     if (home.removed) return;
     home.removed = true;
+    home.unlamp?.();
     this.scene.remove(home.group);
     const i = this.world.obstacles.indexOf(home.prop);
     if (i >= 0) this.world.obstacles.splice(i, 1);
@@ -304,7 +316,7 @@ export class HomeSystem {
       h.roof.scale.setScalar(1 + h.lift * 0.12);
       h.roof.visible = h.lift < 0.5;
     }
-    if ((this.lightTimer -= dt) > 0) return;
+    if (!this.lights.length || (this.lightTimer -= dt) > 0) return;
     this.lightTimer = 0.25;
     camera.getWorldDirection(_w);
     const score = (h) => {
