@@ -23,7 +23,7 @@ npm run dev      # 開發伺服器
 npm run build    # 輸出到 dist/
 ```
 
-網址加上 `?perf` 會在右下角顯示 FPS、draw call 和三角形數；加上 `?stress` 會在小島外圍生成一片大陸（6000 棵樹、800 棟房子、1000 顆石頭），用來測試大地圖效能。
+網址加上 `?perf` 會在右下角顯示 FPS、draw call 和三角形數；加上 `?stress` 會在小島外圍生成一片大陸（6000 棵樹、800 棟房子、1000 顆石頭），用來測試大地圖效能。`?time=19` 可指定時間（0–24 時），`?quality=low|medium|high` 可指定畫質（預設依幀率自動調整）。
 
 ## 結構
 
@@ -39,6 +39,7 @@ npm run build    # 輸出到 dist/
 - `src/world.js`：小島、樹、房子、雲
 - `src/instancing.js`：大量靜態物件的繪製（Scatter：instancing、分區視錐剔除、遠處 LOD）
 - `src/batching.js`：機器人零件的批次繪製（BatchedPart：每個零件照常放進場景階層，實際由共用的 BatchedMesh 畫出）
+- `src/render.js`：光影與畫質（Look：天空、太陽、時間變化、暖光燈具、環境光遮蔽與泛光後製、自動畫質分級）
 - `src/perf.js`：效能工具
 
 技術：Three.js + Vite。
