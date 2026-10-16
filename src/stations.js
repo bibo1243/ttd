@@ -3,7 +3,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 
 const UP = new THREE.Vector3(0, 1, 0);
 const PLATFORM_Y = 0.3;
-const PLATFORM_LEN = 4.6;
+const PLATFORM_LEN = 8;
 const PLATFORM_X = 0.95; // platform centre, measured outward from the rails
 
 const flat = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
@@ -20,8 +20,8 @@ function shadowed(o) {
 
 export const STATION_DEFS = [
   { name: '森林站', color: 0x3f9b5f, at: [10, 0] },
-  { name: '湖畔站', color: 0x3a86d4, at: [1.5, 10] },
-  { name: '小鎮站', color: 0xe8893a, at: [0, -10] },
+  { name: '湖畔站', color: 0x3a86d4, at: [0, 10.6] },
+  { name: '小鎮站', color: 0xe8893a, at: [0.5, -10.5] },
 ];
 
 // ---------- Text sprites ----------
@@ -160,6 +160,7 @@ function makeRobot(color) {
   const g = new THREE.Group();
   const inner = new THREE.Group(); // hops and sways
   g.add(inner);
+  const legs = [];
   const body = new THREE.Mesh(G.body, paint(color));
   body.position.y = 0.13;
   const head = new THREE.Mesh(G.head, RM.white);
@@ -177,6 +178,7 @@ function makeRobot(color) {
     arm.position.set(side * 0.1, 0.14, 0);
     arm.scale.set(0.8, 1.2, 0.8);
     inner.add(eye, leg, arm);
+    legs.push(leg);
   }
   const stalk = new THREE.Mesh(G.stalk, RM.dark);
   stalk.position.y = 0.37;
@@ -184,7 +186,11 @@ function makeRobot(color) {
   ball.position.y = 0.41;
   inner.add(stalk, ball);
   g.userData.inner = inner;
-  return shadowed(g);
+  g.userData.legs = legs;
+  shadowed(g);
+  // Robots ride inside cars, where the roof's shadow would make them murky.
+  g.traverse((c) => (c.receiveShadow = false));
+  return g;
 }
 
 class Robot {
@@ -202,6 +208,25 @@ class Robot {
   walkTo(points, onArrive) {
     this.path = points.map((p) => p.clone());
     this.onArrive = onArrive;
+  }
+
+  sit(seat) {
+    this.seated = true;
+    this.path = [];
+    this.mesh.position.copy(seat.pos);
+    this.mesh.rotation.y = 0;
+    for (const leg of this.mesh.userData.legs) {
+      leg.rotation.x = Math.PI / 2;
+      leg.position.set(leg.position.x, 0.072, 0.055);
+    }
+  }
+
+  stand() {
+    this.seated = false;
+    for (const leg of this.mesh.userData.legs) {
+      leg.rotation.x = 0;
+      leg.position.set(leg.position.x, 0.045, 0);
+    }
   }
 
   update(dt, time) {
@@ -231,6 +256,10 @@ class Robot {
       }
       inner.position.y = Math.abs(Math.sin(time * 13 + this.phase)) * 0.035;
       inner.rotation.z = Math.sin(time * 13 + this.phase) * 0.12;
+    } else if (this.seated) {
+      // Gentle sway with the ride.
+      inner.position.y = 0;
+      inner.rotation.z = Math.sin(time * 3 + this.phase) * 0.03;
     } else {
       inner.position.y = Math.max(0, Math.sin(time * 2.5 + this.phase)) * 0.012;
       inner.rotation.z = Math.sin(time * 1.3 + this.phase) * 0.04;
@@ -255,12 +284,12 @@ function makePlatform(color) {
   g.add(platform, edge);
   const pillarGeo = new THREE.CylinderGeometry(0.035, 0.035, 0.82, 10);
   const white = flat(0xf4efe6);
-  for (const z of [-1.5, 0, 1.5]) {
+  for (const z of [-3, -1.5, 0, 1.5, 3]) {
     const p = new THREE.Mesh(pillarGeo, white);
     p.position.set(PLATFORM_X + 0.3, PLATFORM_Y + 0.41, z);
     g.add(p);
   }
-  const roof = new THREE.Mesh(new RoundedBoxGeometry(1.1, 0.08, 3.8, 2, 0.04), flat(color));
+  const roof = new THREE.Mesh(new RoundedBoxGeometry(1.1, 0.08, 7, 2, 0.04), flat(color));
   roof.position.set(PLATFORM_X + 0.12, PLATFORM_Y + 0.86, 0);
   roof.rotation.z = 0.12;
   g.add(roof);
@@ -308,7 +337,7 @@ class Station {
   waitingSpot(i) {
     const row = i % 2;
     const col = Math.floor(i / 2);
-    const z = -1.9 + col * 0.42 + row * 0.2;
+    const z = -2.9 + col * 0.62 + row * 0.3;
     return this.local(PLATFORM_X + 0.02 + row * 0.24, PLATFORM_Y, z);
   }
 
@@ -357,6 +386,7 @@ export class PassengerSystem {
     this.stations = [...stations].sort((a, b) => a.d - b.d);
     this.robots = new Set(); // robots visible in the world
     this.onboard = [];
+    this.transit = new Set();
     this.floaters = [];
     this.money = 0;
     this.delivered = 0;
@@ -380,7 +410,7 @@ export class PassengerSystem {
 
   get statusText() {
     const s = this.stations[this.next];
-    if (this.state === 'dwell') return `停靠 ${this.current.name}・上下車中`;
+    if (this.state !== 'running') return `停靠 ${this.current.name}・上下車中`;
     return `下一站 ${s.name}`;
   }
 
@@ -439,26 +469,43 @@ export class PassengerSystem {
     station.label.draw(station.waiting.length);
   }
 
-  // Door position of the car nearest to a point, at platform height.
-  #doorNear(point, station) {
+  // Which side of a car faces the platform: +1 or -1 in the car body's frame.
+  #platformSide(v, station) {
+    const q = v.body.getWorldQuaternion(new THREE.Quaternion()).invert();
+    return station.outward.clone().applyQuaternion(q).x >= 0 ? 1 : -1;
+  }
+
+  #doorWorld(v, door) {
+    return v.body.localToWorld(new THREE.Vector3(door.outsideX, PLATFORM_Y, door.z));
+  }
+
+  #onPlatform(p, station) {
+    const local = station.group.worldToLocal(p.clone());
+    return Math.abs(local.z) < PLATFORM_LEN / 2 - 0.12;
+  }
+
+  // Doors on the platform side whose opening lines up with the platform.
+  #usableDoors(v, station) {
+    if (!v.doors) return [];
+    const side = this.#platformSide(v, station);
+    return v.doors.filter((d) => d.side === side && this.#onPlatform(this.#doorWorld(v, d), station));
+  }
+
+  // Best free seat for a robot standing at `from`, plus the door to reach it.
+  #findSeat(from, station) {
     let best = null;
-    let bestD = Infinity;
     for (const v of this.train.vehicles) {
-      if (!v.capacity) continue;
-      const dd = v.group.position.distanceToSquared(point);
-      if (dd < bestD) {
-        bestD = dd;
-        best = v;
+      if (!v.seats) continue;
+      const free = v.seats.filter((s) => !s.robot);
+      if (!free.length) continue;
+      for (const door of this.#usableDoors(v, station)) {
+        const d = this.#doorWorld(v, door).distanceTo(from);
+        if (!best || d < best.d) best = { d, v, door, free };
       }
     }
-    best ??= this.train.vehicles[0];
-    const p = best.group.position.clone().addScaledVector(station.outward, 0.4);
-    p.y = PLATFORM_Y;
-    // Keep the door on the platform.
-    const local = station.group.worldToLocal(p.clone());
-    local.z = THREE.MathUtils.clamp(local.z, -PLATFORM_LEN / 2 + 0.2, PLATFORM_LEN / 2 - 0.2);
-    local.x = PLATFORM_X - 0.38;
-    return station.local(local.x, PLATFORM_Y, local.z);
+    if (!best) return null;
+    const seat = best.free.reduce((a, b) => (Math.abs(b.pos.z - best.door.z) < Math.abs(a.pos.z - best.door.z) ? b : a));
+    return { v: best.v, door: best.door, seat };
   }
 
   #fare(robot) {
@@ -466,12 +513,18 @@ export class PassengerSystem {
     return Math.round(8 + trip * 0.8);
   }
 
+  #setDoors(station) {
+    for (const v of this.train.vehicles) v.openSide = station ? this.#platformSide(v, station) : 0;
+  }
+
   #arrive(station) {
     this.state = 'dwell';
     this.current = station;
     this.dwell = 0;
-    this.timer = 0;
+    this.timer = 0.5; // let the doors slide open first
     this.walkingIn = 0;
+    this.walkingOut = 0;
+    this.#setDoors(station);
     this.#emit();
   }
 
@@ -517,18 +570,22 @@ export class PassengerSystem {
       s.spawnTimer -= dt;
       if (s.spawnTimer <= 0) {
         s.spawnTimer = 2.5 + Math.random() * 2.5;
-        if (!(this.state === 'dwell' && this.current === s)) this.#spawn(s);
+        if (!(this.state !== 'running' && this.current === s)) this.#spawn(s);
       }
     }
 
     if (this.state === 'dwell') this.#dwell(dt);
+    else if (this.state === 'closing') {
+      this.timer -= dt;
+      if (this.timer <= 0) this.#depart();
+    }
 
     for (const r of this.robots) {
       r.update(dt, time);
       if (r.vanishing) {
         r.scale -= dt * 4;
         if (r.scale <= 0.05) {
-          this.scene.remove(r.mesh);
+          r.mesh.removeFromParent();
           this.robots.delete(r);
         }
       }
@@ -556,50 +613,104 @@ export class PassengerSystem {
       this.timer = BOARD_INTERVAL;
       return;
     }
-    const room = this.capacity - this.onboard.length - this.walkingIn;
-    const next = s.waiting.find((r) => !r.boarding);
-    if (room > 0 && next) {
-      this.#board(next, s);
-      this.timer = BOARD_INTERVAL;
-      return;
+    for (const r of s.waiting) {
+      if (r.boarding) continue;
+      if (this.#board(r, s)) {
+        this.timer = BOARD_INTERVAL;
+        return;
+      }
+      break; // no seat reachable from the platform
     }
-    if (this.walkingIn === 0 && this.dwell >= MIN_DWELL) this.#depart();
+    if (this.walkingIn === 0 && this.walkingOut === 0 && this.dwell >= MIN_DWELL) {
+      this.state = 'closing';
+      this.timer = 0.6;
+      this.#setDoors(null);
+    }
   }
 
   #board(r, s) {
+    const spot = this.#findSeat(r.mesh.position, s);
+    if (!spot) return false;
+    const { v, door, seat } = spot;
+    seat.robot = r;
     r.boarding = true;
+    r.vehicle = v;
+    r.seat = seat;
     this.walkingIn++;
-    const door = this.#doorNear(r.mesh.position, s);
-    r.speed = 1.3;
-    r.walkTo([door], () => {
+    r.speed = 1.2;
+    r.walkTo([this.#doorWorld(v, door)], () => {
+      if (!this.train.vehicles.includes(v)) return; // train was rebuilt meanwhile
       s.waiting.splice(s.waiting.indexOf(r), 1);
-      this.scene.remove(r.mesh);
-      this.robots.delete(r);
-      this.walkingIn--;
-      this.onboard.push(r);
       this.#regroup(s);
-      this.#emit();
+      v.body.attach(r.mesh);
+      r.transit = 'in';
+      this.transit.add(r);
+      const f = v.floorY;
+      const front = seat.pos.z + 0.13;
+      r.walkTo(
+        [
+          new THREE.Vector3(door.insideX, f, door.z),
+          new THREE.Vector3(0, f, door.z),
+          new THREE.Vector3(0, f, front),
+          new THREE.Vector3(seat.pos.x, f, front),
+        ],
+        () => {
+          r.sit(seat);
+          r.boarding = false;
+          r.transit = null;
+          this.transit.delete(r);
+          this.walkingIn--;
+          this.onboard.push(r);
+          this.#emit();
+        },
+      );
     });
+    return true;
   }
 
   #disembark(r, s) {
-    const lane = (Math.random() - 0.5) * 3.2;
-    const door = this.#doorNear(s.local(PLATFORM_X, PLATFORM_Y, lane), s);
-    r.mesh.position.copy(door);
-    r.mesh.rotation.y = Math.atan2(s.outward.x, s.outward.z);
-    r.scale = 1;
-    r.path = [];
-    this.scene.add(r.mesh);
-    this.robots.add(r);
+    const v = r.vehicle;
+    const seat = r.seat;
+    let doors = this.#usableDoors(v, s);
+    if (!doors.length) doors = v.doors.filter((d) => d.side === this.#platformSide(v, s));
+    const door = doors.reduce((a, b) => (Math.abs(b.z - seat.pos.z) < Math.abs(a.z - seat.pos.z) ? b : a));
+    const f = v.floorY;
+    const front = seat.pos.z + 0.13;
+    this.walkingOut++;
+    r.transit = 'out';
+    this.transit.add(r);
+    r.stand();
+    r.speed = 1.1;
+    r.walkTo(
+      [
+        new THREE.Vector3(seat.pos.x, f, front),
+        new THREE.Vector3(0, f, front),
+        new THREE.Vector3(0, f, door.z),
+        new THREE.Vector3(door.insideX, f, door.z),
+        new THREE.Vector3(door.outsideX, PLATFORM_Y, door.z),
+      ],
+      () => {
+        seat.robot = null;
+        r.vehicle = null;
+        r.seat = null;
+        r.transit = null;
+        this.transit.delete(r);
+        this.scene.attach(r.mesh);
+        this.walkingOut--;
+        this.#pay(r, s);
+      },
+    );
+  }
+
+  #pay(r, s) {
     const fare = this.#fare(r);
     this.money += fare;
     this.delivered++;
-    const f = new FloatText(`+$${fare}`);
-    f.sprite.position.copy(door).add(new THREE.Vector3(0, 0.6, 0));
-    this.scene.add(f.sprite);
-    this.floaters.push(f);
-    const exit = door.clone().addScaledVector(s.outward, 0.75);
-    r.speed = 1.0;
+    const text = new FloatText(`+$${fare}`);
+    text.sprite.position.copy(r.mesh.position).add(new THREE.Vector3(0, 0.6, 0));
+    this.scene.add(text.sprite);
+    this.floaters.push(text);
+    const exit = r.mesh.position.clone().addScaledVector(s.outward, 0.75);
     r.walkTo([exit], () => this.#vanish(r));
     this.#emit();
   }
@@ -608,9 +719,57 @@ export class PassengerSystem {
     r.vanishing = true;
   }
 
-  // Train type changed: keep as many riders as fit.
-  trimToCapacity() {
-    while (this.onboard.length > this.capacity) this.onboard.pop();
+  // The train was rebuilt (new type or cars added/removed). Riders whose car
+  // is gone move to a free seat elsewhere; if none is left they get off.
+  reseat() {
+    const alive = new Set(this.train.vehicles);
+    // Robots caught walking inside a car that just vanished finish instantly.
+    for (const r of [...this.transit]) {
+      if (alive.has(r.vehicle)) continue;
+      this.transit.delete(r);
+      if (r.transit === 'in') {
+        r.boarding = false;
+        this.walkingIn--;
+        this.onboard.push(r);
+      } else {
+        this.walkingOut--;
+        this.delivered++;
+        this.money += this.#fare(r);
+        r.mesh.removeFromParent();
+        this.robots.delete(r);
+      }
+      r.transit = null;
+    }
+    for (const r of [...this.onboard]) {
+      if (alive.has(r.vehicle)) continue;
+      const free = this.train.vehicles.flatMap((v) => (v.seats ?? []).filter((s) => !s.robot).map((s) => [v, s]));
+      if (!free.length) {
+        this.onboard.splice(this.onboard.indexOf(r), 1);
+        r.mesh.removeFromParent();
+        this.robots.delete(r);
+        continue;
+      }
+      const [v, seat] = free[0];
+      seat.robot = r;
+      r.vehicle = v;
+      r.seat = seat;
+      v.body.add(r.mesh);
+      r.sit(seat);
+    }
+    // Robots still walking to a door of a car that no longer exists go back.
+    for (const s of this.stations) {
+      for (const r of s.waiting) {
+        if (r.boarding && !alive.has(r.vehicle)) {
+          r.boarding = false;
+          r.vehicle = null;
+          r.seat = null;
+          this.walkingIn--;
+          if (r.mesh.parent !== this.scene) this.scene.attach(r.mesh);
+        }
+      }
+      this.#regroup(s);
+    }
+    if (this.state !== 'running' && this.current) this.#setDoors(this.state === 'dwell' ? this.current : null);
     this.next = this.state === 'running' ? this.#nearestAhead() : this.next;
     this.#emit();
   }

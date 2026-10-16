@@ -12,7 +12,6 @@ export const TRAIN_TYPES = {
     maxMid: 10,
     speedScale: 1,
     smoke: true,
-    capacity: { head: 0, mid: 6, tail: 0 },
   },
   bullet: {
     label: '高鐵',
@@ -23,7 +22,6 @@ export const TRAIN_TYPES = {
     defaultMid: 3,
     maxMid: 8,
     speedScale: 1.8,
-    capacity: { head: 4, mid: 8, tail: 4 },
   },
   tram: {
     label: '路面電車',
@@ -34,7 +32,6 @@ export const TRAIN_TYPES = {
     defaultMid: 1,
     maxMid: 4,
     speedScale: 0.7,
-    capacity: { head: 5, mid: 5, tail: 5 },
   },
 };
 
@@ -69,10 +66,6 @@ export class Train {
     }
     for (const v of this.vehicles) this.scene.remove(v.group);
     this.vehicles = [this.head, ...this.mids, ...(this.tail ? [this.tail] : [])];
-    const cap = c.capacity;
-    this.head.capacity = cap.head;
-    for (const m of this.mids) m.capacity = cap.mid;
-    if (this.tail) this.tail.capacity = cap.tail;
     for (const v of this.vehicles) this.scene.add(v.group);
   }
 
@@ -93,7 +86,7 @@ export class Train {
   }
 
   get capacity() {
-    return this.vehicles.reduce((sum, v) => sum + (v.capacity || 0), 0);
+    return this.vehicles.reduce((sum, v) => sum + (v.seats?.length ?? 0), 0);
   }
 
   get carCount() {
@@ -109,6 +102,7 @@ export class Train {
     for (const v of this.vehicles) {
       d -= prevHalf + (prevHalf ? this.config.gap : 0) + v.length / 2;
       v.speedFactor = this.speed / 4;
+      v.dt = dt;
       v.place(this.track, d, this.travelled, time);
       prevHalf = v.length / 2;
     }

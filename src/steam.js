@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { M, Vehicle, axle, box, mat, shadowed } from './parts.js';
+import { M, Vehicle, axle, box, buildCabin, mat, shadowed } from './parts.js';
 
 const CAR_COLORS = [0x4a90c8, 0xf2a541, 0x7bc67b, 0xe8789a, 0x9b7fd1, 0x56c2c2];
 
@@ -123,7 +123,6 @@ export class Carriage extends Vehicle {
     super(1.5, 0.48);
     const b = this.body;
     const color = CAR_COLORS[index % CAR_COLORS.length];
-    const paint = mat(color);
     const trim = mat(new THREE.Color(color).multiplyScalar(0.7));
 
     const chassis = box(0.58, 0.1, 1.44, M.chassis, 0.03);
@@ -137,34 +136,29 @@ export class Carriage extends Vehicle {
       this.group.add(bogie);
     }
 
-    const body = box(0.66, 0.5, 1.4, paint, 0.1);
-    body.position.y = 0.66;
-    b.add(body);
+    buildCabin(this, {
+      ref: { hw: 0.33, bottom: 0.41, top: 0.91 },
+      z0: -0.7,
+      z1: 0.7,
+      power: 6,
+      paint: mat(color, { roughness: 0.45 }),
+      windows: [-0.3, 0, 0.3].map((z) => ({ z, w: 0.2 })),
+      winY: [0.6, 0.85],
+      doors: [{ z: -0.58, w: 0.14 }, { z: 0.58, w: 0.14 }],
+      floorY: 0.45,
+      doorTop: 0.87,
+      doorMat: trim,
+      rows: [-0.3, 0, 0.3],
+      seatX: 0.15,
+      seatColor: 0xb8433a,
+    });
 
-    const stripe = box(0.68, 0.06, 1.36, trim, 0.02);
-    stripe.position.y = 0.48;
-    b.add(stripe);
-
-    const winGeo = new RoundedBoxGeometry(0.02, 0.18, 0.2, 2, 0.02);
-    const frameGeo = new RoundedBoxGeometry(0.016, 0.23, 0.25, 2, 0.03);
-    const doorGeo = new RoundedBoxGeometry(0.016, 0.36, 0.16, 2, 0.02);
     for (const side of [-1, 1]) {
-      for (let i = 0; i < 3; i++) {
-        const z = -0.32 + i * 0.32;
-        const f = new THREE.Mesh(frameGeo, M.frame);
-        f.position.set(side * 0.332, 0.73, z);
-        const w = new THREE.Mesh(winGeo, M.window);
-        w.position.set(side * 0.338, 0.73, z);
-        b.add(f, w);
-      }
-      for (const z of [-0.58, 0.58]) {
-        const d = new THREE.Mesh(doorGeo, trim);
-        d.position.set(side * 0.334, 0.68, z);
-        const dw = new THREE.Mesh(new RoundedBoxGeometry(0.016, 0.1, 0.1, 2, 0.02), M.window);
-        dw.position.set(side * 0.341, 0.77, z);
-        b.add(d, dw);
-      }
+      const stripe = box(0.012, 0.05, 0.98, trim, 0.01);
+      stripe.position.set(side * 0.332, 0.5, 0);
+      b.add(stripe);
     }
+
     // Rubber gangways at each end
     for (const z of [-0.74, 0.74]) {
       const g = box(0.34, 0.42, 0.08, M.black, 0.03);

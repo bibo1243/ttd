@@ -53,8 +53,9 @@ scene.add(sun);
 
 const v = (x, z) => new THREE.Vector3(x, 0, z);
 const track = new Track([
-  v(10, -4), v(10, 0), v(10, 4), v(8.2, 8.6), v(4.5, 10), v(-1.5, 10), v(-4.5, 7.6),
-  v(-7.5, 8.6), v(-11, 6), v(-12.5, 0), v(-10, -6), v(-5, -9.6), v(0, -10), v(5, -10), v(8.6, -8),
+  v(10, -5), v(10, 0), v(10, 5), v(8.4, 9.2), v(5, 10.6), v(0, 10.6), v(-4.5, 10.6),
+  v(-7.5, 9), v(-10.5, 7), v(-12.5, 1), v(-11, -5.5), v(-7.5, -9.4),
+  v(-4.5, -10.5), v(0.5, -10.5), v(5.5, -10.5), v(8.8, -8.8),
 ]);
 scene.add(track.group);
 
@@ -100,7 +101,7 @@ for (const [key, t] of Object.entries(TRAIN_TYPES)) {
   btn.classList.toggle('on', key === train.type);
   btn.addEventListener('click', () => {
     train.setType(key);
-    passengers.trimToCapacity();
+    passengers.reseat();
     for (const b of typeBar.children) b.classList.toggle('on', b.dataset.type === key);
     updateCount();
   });
@@ -109,12 +110,12 @@ for (const [key, t] of Object.entries(TRAIN_TYPES)) {
 $('addCar').addEventListener('click', () => {
   train.addCar();
   updateCount();
-  passengers.trimToCapacity();
+  passengers.reseat();
 });
 $('removeCar').addEventListener('click', () => {
   train.removeCar();
   updateCount();
-  passengers.trimToCapacity();
+  passengers.reseat();
 });
 
 // Earnings panel. Money counts up smoothly toward the real total.

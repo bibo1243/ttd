@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { M, Vehicle, axle, box, loft, mat, rod, shadowed } from './parts.js';
+import { M, Vehicle, axle, box, buildCabin, loft, mat, rod, shadowed } from './parts.js';
 
 const glass = mat(0x22303d, { roughness: 0.08, metalness: 0.4, envMapIntensity: 1.6 });
 const headLamp = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff2c4, emissiveIntensity: 1.4 });
@@ -21,6 +21,21 @@ const surface = (paint) =>
       }),
     ),
   );
+
+const paintMat = (paint) =>
+  new THREE.MeshPhysicalMaterial({ color: paint, roughness: 0.32, clearcoat: 0.6, clearcoatRoughness: 0.25 });
+
+// Split [a, b] into pieces that skip a gap around each door.
+function segmentsBetween(a, b, doors, gap) {
+  const out = [];
+  let z = a;
+  for (const d of [...doors].sort((x, y) => x - y)) {
+    if (d - gap > z) out.push([z, d - gap]);
+    z = Math.max(z, d + gap);
+  }
+  if (b > z) out.push([z, b]);
+  return out;
+}
 
 function bodyMesh(stations, paint, opts) {
   const m = surface(paint);
@@ -80,47 +95,50 @@ export class BulletCar extends Vehicle {
     const stripeLight = mat(0x6fb6f0, { roughness: 0.35 });
 
     const straightEnd = cab ? half - HSR_NOSE : half;
-    const stations = [
-      { z: -half, ...HSR },
-      { z: straightEnd, ...HSR },
-    ];
+    const nose = [];
     if (cab) {
       const n = 18;
       for (let i = 1; i <= n; i++) {
         const t = i / n;
-        stations.push({ z: straightEnd + t * HSR_NOSE, ...hsrNose(t) });
+        nose.push({ z: straightEnd + t * HSR_NOSE, ...hsrNose(t) });
       }
     }
-    b.add(bodyMesh(stations, white, { segments: 48, power: 5 }));
+    const doorZ = cab ? [-half + 0.14, straightEnd - 0.16] : [-half + 0.14, half - 0.14];
+    const winStart = -half + 0.32;
+    const winEnd = straightEnd - (cab ? 0.34 : 0.32);
+    const winCount = Math.floor((winEnd - winStart) / 0.21) + 1;
+    const rowCount = cab ? 2 : 4;
+    const rowA = doorZ[0] + 0.2;
+    const rowB = doorZ[1] - 0.2;
+    buildCabin(this, {
+      ref: HSR,
+      z0: -half,
+      z1: straightEnd,
+      nose,
+      power: 5,
+      segments: 48,
+      paint: paintMat(white),
+      windows: Array.from({ length: winCount }, (_, i) => ({ z: winStart + i * 0.21, w: 0.15 })),
+      winY: [0.63, 0.81],
+      doors: doorZ.map((z) => ({ z, w: 0.13 })),
+      floorY: 0.43,
+      doorTop: 0.81,
+      doorMat: mat(0xdfe4ea, { roughness: 0.4 }),
+      frameMat: mat(0x8d97a3, { roughness: 0.4, metalness: 0.3 }),
+      rows: Array.from({ length: rowCount }, (_, i) => rowA + ((rowB - rowA) * i) / (rowCount - 1)),
+      seatX: 0.155,
+      seatColor: 0x3b6fb8,
+    });
 
-    // Livery stripes and windows along the straight section.
-    const len = straightEnd + half - 0.12;
-    const mid = (straightEnd - half) / 2;
-    for (const side of [-1, 1]) {
-      const x = side * (HSR.hw + 0.002);
-      const s1 = box(0.012, 0.05, len, stripe, 0.006);
-      s1.position.set(x, 0.53, mid);
-      const s2 = box(0.012, 0.018, len, stripeLight, 0.004);
-      s2.position.set(x, 0.585, mid);
-      b.add(s1, s2);
-
-      const winGeo = new RoundedBoxGeometry(0.014, 0.13, 0.15, 2, 0.03);
-      const start = -half + 0.32;
-      const end = straightEnd - (cab ? 0.34 : 0.32);
-      const count = Math.floor((end - start) / 0.21) + 1;
-      for (let i = 0; i < count; i++) {
-        const w = new THREE.Mesh(winGeo, glass);
-        w.position.set(x, 0.72, start + i * 0.21);
-        b.add(w);
-      }
-      // Doors near the car ends
-      const doorZ = cab ? [-half + 0.14, straightEnd - 0.16] : [-half + 0.14, half - 0.14];
-      for (const z of doorZ) {
-        const d = box(0.012, 0.36, 0.13, mat(0xdfe4ea, { roughness: 0.4 }), 0.01);
-        d.position.set(x, 0.6, z);
-        const dw = new THREE.Mesh(new RoundedBoxGeometry(0.014, 0.1, 0.07, 2, 0.02), glass);
-        dw.position.set(x * 1.002, 0.72, z);
-        b.add(d, dw);
+    // Livery stripes, broken at the doors.
+    for (const [z0, z1] of segmentsBetween(-half + 0.05, straightEnd - 0.02, doorZ, 0.085)) {
+      for (const side of [-1, 1]) {
+        const x = side * (HSR.hw + 0.002);
+        const s1 = box(0.012, 0.05, z1 - z0, stripe, 0.006);
+        s1.position.set(x, 0.53, (z0 + z1) / 2);
+        const s2 = box(0.012, 0.018, z1 - z0, stripeLight, 0.004);
+        s2.position.set(x, 0.585, (z0 + z1) / 2);
+        b.add(s1, s2);
       }
     }
 
@@ -219,34 +237,34 @@ export class TramCar extends Vehicle {
         });
       }
     }
-    b.add(bodyMesh(stations, cream, { segments: 44, power: 6 }));
+    buildCabin(this, {
+      ref: TRAM,
+      z0: -half,
+      z1: half - front,
+      nose: stations.slice(2),
+      power: 6,
+      paint: paintMat(cream),
+      windows: [{ z: -0.36, w: 0.24 }, { z: 0.27, w: 0.24 }],
+      winY: [0.6, 0.88],
+      doors: [{ z: -0.03, w: 0.2 }],
+      floorY: 0.31,
+      doorTop: 0.86,
+      doorMat: green,
+      frameMat: mat(0xe9e2cf, { roughness: 0.4 }),
+      rows: [-0.44, -0.24, 0.24],
+      seatX: 0.14,
+      seatColor: 0x2e7d5b,
+    });
 
-    const straight = this.length - front;
-    const mid = -front / 2;
-    for (const side of [-1, 1]) {
-      const x = side * (TRAM.hw + 0.002);
-      const band = box(0.012, 0.2, straight - 0.04, green, 0.01);
-      band.position.set(x, 0.36, mid);
-      const line = box(0.012, 0.02, straight - 0.04, gold, 0.005);
-      line.position.set(x, 0.48, mid);
-      b.add(band, line);
-
-      // Big panoramic windows, with a glass door in the middle
-      const winGeo = new RoundedBoxGeometry(0.014, 0.26, 0.24, 2, 0.04);
-      for (const z of [-0.36, 0.3]) {
-        const w = new THREE.Mesh(winGeo, glass);
-        w.position.set(x, 0.74, z + mid * 0.3);
-        b.add(w);
+    for (const [z0, z1] of segmentsBetween(-half + 0.02, half - front - 0.02, [-0.03], 0.115)) {
+      for (const side of [-1, 1]) {
+        const x = side * (TRAM.hw + 0.002);
+        const band = box(0.012, 0.2, z1 - z0, green, 0.01);
+        band.position.set(x, 0.36, (z0 + z1) / 2);
+        const line = box(0.012, 0.02, z1 - z0, gold, 0.005);
+        line.position.set(x, 0.48, (z0 + z1) / 2);
+        b.add(band, line);
       }
-      const door = box(0.014, 0.6, 0.2, green, 0.02);
-      door.position.set(x, 0.56, -0.03);
-      const doorGlass = new THREE.Mesh(new RoundedBoxGeometry(0.016, 0.34, 0.07, 2, 0.02), glass);
-      for (const dz of [-0.045, 0.045]) {
-        const dg = doorGlass.clone();
-        dg.position.set(x * 1.003, 0.64, -0.03 + dz);
-        b.add(dg);
-      }
-      b.add(door);
     }
 
     // Roof cap
