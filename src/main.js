@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TRAIN_TYPES } from './train.js';
 import { Network } from './network.js';
@@ -9,26 +8,15 @@ import { BuildController } from './build.js';
 import { params, setupPerf } from './perf.js';
 import { batcher } from './batching.js';
 import { MODULES } from './modules.js';
+import { Look } from './render.js';
 
 const app = document.getElementById('app');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xbfe3f2);
-scene.fog = new THREE.Fog(0xbfe3f2, 50, 130);
 batcher.install(scene);
-// Soft studio reflections give painted metal and glass a polished look.
-const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-scene.environmentIntensity = 0.35;
 
 const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 300);
 camera.position.set(19, 25, 25);
@@ -40,21 +28,9 @@ controls.maxPolarAngle = Math.PI * 0.47;
 controls.minDistance = 3;
 controls.maxDistance = 70;
 
-// Lights
-scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x6a8f4e, 0.95));
-const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
-sun.position.set(14, 24, 10);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-const sc = sun.shadow.camera;
-sc.left = sc.bottom = -28;
-sc.right = sc.top = 28;
-sc.near = 1;
-sc.far = 70;
-sun.shadow.bias = -0.0002;
-sun.shadow.normalBias = 0.05;
-sun.shadow.radius = 3;
-scene.add(sun);
+// Sky, sun, lamps, time of day and post-processing (render.js).
+const look = new Look({ renderer, scene, camera, quality: params.get('quality') });
+if (params.has('time')) look.setTime(parseFloat(params.get('time')));
 
 // The island starts empty of rails: the player lays track and builds stations.
 const world = buildWorld(scene, { stress: params.has('stress') });
@@ -161,6 +137,7 @@ const game = {
   network,
   passengers,
   builder,
+  look,
   money: {
     get: () => passengers.money,
     spend: (n) => passengers.spend(n),
@@ -169,6 +146,7 @@ const game = {
   },
   tools: { addTool: (t) => builder.addTool(t) },
 };
+look.onTime((night) => world.setNight(night));
 for (const m of MODULES) m.init?.(game);
 
 // Saved in this browser: on every build, every few seconds, and on leaving.
@@ -187,7 +165,7 @@ $('reset').addEventListener('click', (e) => {
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  look.setSize(window.innerWidth, window.innerHeight);
 });
 
 const perf = setupPerf(renderer);
@@ -210,7 +188,8 @@ function simulate(dt, time) {
 let simTime = 0;
 let infoTimer = 0;
 function tick() {
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const frameTime = clock.getDelta();
+  const dt = Math.min(frameTime, 0.05);
   simTime += dt;
   const time = simTime;
   simulate(dt, time);
@@ -235,7 +214,7 @@ function tick() {
   }
   for (const m of MODULES) m.frame?.(dt);
   controls.update();
-  renderer.render(scene, camera);
+  look.render(frameTime);
   perf.frame();
   requestAnimationFrame(tick);
 }
@@ -248,5 +227,5 @@ const fastForward = (seconds) => {
     simulate(1 / 30, simTime);
   }
 };
-window.__game = { game, network, camera, controls, passengers, builder, world, fastForward };
-window.__perf = { ...perf, bench: (n) => perf.bench(() => renderer.render(scene, camera), n) };
+window.__game = { game, network, camera, controls, passengers, builder, world, look, fastForward };
+window.__perf = { ...perf, bench: (n) => perf.bench(() => look.render(), n) };

@@ -27,8 +27,10 @@ function sceneryParts(scatter) {
   const bark = flat(0x8b5a3c);
   const leaves = flat(WHITE);
   const walls = flat(WHITE);
-  const glass = new THREE.MeshStandardMaterial({ color: 0xbfe6ff, roughness: 0.2 });
+  // Windows light up warm at night (see setNight below).
+  const glass = new THREE.MeshStandardMaterial({ color: 0xbfe6ff, roughness: 0.2, emissive: 0xffb45a, emissiveIntensity: 0 });
   return {
+    glass,
     trunk: scatter.part(translated(new THREE.CylinderGeometry(0.06, 0.08, 1, 6), 0.5), bark, {
       low: translated(new THREE.CylinderGeometry(0.06, 0.08, 1, 4), 0.5),
     }),
@@ -210,7 +212,12 @@ export function buildWorld(scene, opts = {}) {
     },
   };
   const clearArea = (x, z, r) => scenery.remove(scenery.query((px, pz) => (px - x) ** 2 + (pz - z) ** 2 < r * r)).length;
-  return { clouds, obstacles, scenery, clearArea };
+  // 0 = day, 1 = night: house windows glow as if lamps were on inside.
+  const setNight = (k) => {
+    P.glass.emissiveIntensity = k * 2.2;
+    P.glass.color.setHex(0xbfe6ff).lerp(new THREE.Color(0xffd9a0), k);
+  };
+  return { clouds, obstacles, scenery, clearArea, setNight };
 }
 
 // A big mainland around the island, packed with scenery. Only used with
