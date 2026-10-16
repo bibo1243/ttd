@@ -1,106 +1,45 @@
 import * as THREE from 'three';
-import { Track } from './track.js';
-import {
-  FloatText,
-  PLATFORM_LEN,
-  PLATFORM_X,
-  STATION_NAMES,
-  Station,
-  makePlatform,
-  placePlatform,
-  platformContains,
-} from './stations.js';
+import { arcCurve, joinCurve, minRadius, straightCurve } from './network.js';
+import { FloatText, PLATFORM_X, STATION_NAMES, Station, makePlatform, placePlatform } from './stations.js';
+import { Train, TRAIN_TYPES } from './train.js';
 
 // Prices. Building on occupied ground also pays to clear what stands there.
-export const COST = { track: 12, station: 600, tree: 15, house: 150, rock: 5 };
+export const COST = { track: 12, station: 600, train: 1500, tree: 15, house: 150, rock: 5 };
 const KIND_LABEL = { tree: '棵樹', house: '間房子', rock: '顆石頭' };
+const LINE_COLORS = [0xe8504a, 0x3a86d4, 0x3fae5f, 0xf2a33a, 0x8e6cc8, 0x2fa6a0, 0xe46a9a, 0x6b7f99];
 
-const SNAP = 0.5;
 const ISLAND_R = 22;
 const MIN_RADIUS = 2.2; // tightest curve the longest cars can take
-const TRACK_GAP = 1.5; // closest two parts of the loop may come to each other
+const TRACK_GAP = 1.25; // closest two separate tracks may run
+const JOIN_ZONE = 4; // near a junction, tracks may come closer as they part
 const CLEAR_R = 0.75;
-const MAX_STATIONS = 8;
-const SAVE_KEY = 'ttdSave1';
-
-// The layout the first prototype shipped with, offered as a quick start.
-const DEMO = {
-  points: [[10, -6], [10, 6], [6, 10.6], [-6, 10.6], [-12, 5], [-12, -5], [-6, -10.5], [6, -10.5]],
-  stations: [[10, 0], [0, 10.6], [0, -10.5]],
-};
-const CORNER_R = 4; // preferred curve radius at each corner
-
-// Turn the player's corner points into a loop of straight runs joined by
-// circular curves, sampled densely. Corners get CORNER_R where the straights
-// are long enough, tighter otherwise.
-function roundLoop(pts) {
-  const n = pts.length;
-  const out = [];
-  let minR = Infinity;
-  for (let i = 0; i < n; i++) {
-    const prev = pts[(i - 1 + n) % n];
-    const p = pts[i];
-    const next = pts[(i + 1) % n];
-    const a = new THREE.Vector3().subVectors(p, prev);
-    const b = new THREE.Vector3().subVectors(next, p);
-    const la = a.length();
-    const lb = b.length();
-    a.normalize();
-    b.normalize();
-    const turn = Math.acos(THREE.MathUtils.clamp(a.dot(b), -1, 1));
-    if (turn < 0.01 || turn > Math.PI - 0.05) {
-      if (turn > 1) minR = 0; // doubles straight back on itself
-      out.push(p.clone());
-      continue;
-    }
-    const tanHalf = Math.tan(turn / 2);
-    const t = Math.min(CORNER_R * tanHalf, la / 2, lb / 2);
-    const R = t / tanHalf;
-    minR = Math.min(minR, R);
-    const start = p.clone().addScaledVector(a, -t);
-    const end = p.clone().addScaledVector(b, t);
-    const normal = b.clone().addScaledVector(a, -a.dot(b)).normalize(); // toward the inside of the turn
-    const center = start.clone().addScaledVector(normal, R);
-    const from = Math.atan2(start.z - center.z, start.x - center.x);
-    const to = Math.atan2(end.z - center.z, end.x - center.x);
-    const sweep = THREE.MathUtils.euclideanModulo(to - from + Math.PI, Math.PI * 2) - Math.PI;
-    const steps = Math.max(2, Math.ceil((Math.abs(sweep) * R) / 0.25));
-    for (let k = 0; k <= steps; k++) {
-      const ang = from + sweep * (k / steps);
-      out.push(new THREE.Vector3(center.x + Math.cos(ang) * R, 0, center.z + Math.sin(ang) * R));
-    }
-  }
-  // Fill long straights so the spline through these points stays straight.
-  const dense = [];
-  for (let i = 0; i < out.length; i++) {
-    const p = out[i];
-    const q = out[(i + 1) % out.length];
-    const len = p.distanceTo(q);
-    if (len < 1e-3) continue;
-    const steps = Math.max(1, Math.ceil(len / 0.5));
-    for (let k = 0; k < steps; k++) dense.push(p.clone().lerp(q, k / steps));
-  }
-  return { dense, minR };
-}
+const SNAP_NODE = 0.8;
+const SNAP_EDGE = 0.6;
+const MAX_STATIONS = 12;
+const MAX_TRAINS = 10;
+const SAVE_KEY = 'ttdSave2';
 
 const UP = new THREE.Vector3(0, 1, 0);
+const V = (x, z) => new THREE.Vector3(x, 0, z);
 const money = (n) => `$${Math.round(n).toLocaleString()}`;
+const GOOD = new THREE.Color(0x4cc47a);
+const BAD = new THREE.Color(0xf0605a);
 
-// A flat strip following closed loop `pts`, `offset` to the side of it.
+// An open flat strip along `pts`.
 function ribbon(pts, width, offset, y) {
   const n = pts.length;
-  const pos = new Float32Array((n + 1) * 6);
+  const pos = new Float32Array(n * 6);
   const idx = [];
   const t = new THREE.Vector3();
   const side = new THREE.Vector3();
-  for (let i = 0; i <= n; i++) {
-    const p = pts[i % n];
-    t.subVectors(pts[(i + 1) % n], pts[(i - 1 + n) % n]).normalize();
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    t.subVectors(pts[Math.min(n - 1, i + 1)], pts[Math.max(0, i - 1)]).normalize();
     side.crossVectors(t, UP).normalize();
     const a = offset - width / 2;
     const b = offset + width / 2;
     pos.set([p.x + side.x * a, y, p.z + side.z * a, p.x + side.x * b, y, p.z + side.z * b], i * 6);
-    if (i < n) idx.push(i * 2, i * 2 + 2, i * 2 + 1, i * 2 + 1, i * 2 + 2, i * 2 + 3);
+    if (i < n - 1) idx.push(i * 2, i * 2 + 2, i * 2 + 1, i * 2 + 1, i * 2 + 2, i * 2 + 3);
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -108,21 +47,24 @@ function ribbon(pts, width, offset, y) {
   return geo;
 }
 
-const GOOD = new THREE.Color(0x4cc47a);
-const BAD = new THREE.Color(0xf0605a);
+const reverseCurve = (c) => new THREE.CubicBezierCurve3(c.v3.clone(), c.v2.clone(), c.v1.clone(), c.v0.clone());
+const best = (dirs, want) => dirs.reduce((b, d) => (!b || d.dot(want) > b.dot(want) ? d : b), null);
 
 export class BuildController {
-  constructor({ scene, camera, dom, passengers, world, ui }) {
+  constructor({ scene, camera, dom, passengers, network, world, ui }) {
     this.scene = scene;
     this.camera = camera;
     this.dom = dom;
     this.passengers = passengers;
+    this.network = network;
     this.scenery = world.scenery;
     this.ui = ui;
     this.tool = null;
-    this.points = [];
-    this.track = null;
-    this.trackCost = 0;
+    this.chain = null; // where the next piece of track starts
+    this.lines = [];
+    this.editing = null; // line being edited with the line tool
+    this.newType = 'steam';
+    this.selected = null; // train or robot shown in the info card
     this.listeners = [];
     this.raycaster = new THREE.Raycaster();
     this.ground = new THREE.Plane(UP, 0);
@@ -138,6 +80,7 @@ export class BuildController {
   #changed() {
     for (const fn of this.listeners) fn(this);
     this.#refreshTools();
+    this.#renderLines();
     this.save();
   }
 
@@ -145,22 +88,21 @@ export class BuildController {
     return this.passengers.stations;
   }
 
+  get trains() {
+    return this.passengers.trains;
+  }
+
   // ---------- Ghost previews ----------
 
   #makeGhosts() {
     const ghost = (color, opacity) =>
       new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide });
-    this.bedMat = ghost(GOOD, 0.45);
+    this.bedMat = ghost(GOOD, 0.5);
     this.railMat = ghost(0xffffff, 0.9);
+    this.hotMat = ghost(0xff4433, 0.55);
     this.ghostTrack = new THREE.Group();
-    this.ghostTrack.renderOrder = 5;
-    this.scene.add(this.ghostTrack);
-
-    this.markerGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.06, 20);
-    this.markerMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
-    this.startMat = new THREE.MeshStandardMaterial({ color: 0xffd34d, roughness: 0.4, emissive: 0x6b4a00 });
-    this.markers = new THREE.Group();
-    this.scene.add(this.markers);
+    this.hotTrack = new THREE.Group();
+    this.scene.add(this.ghostTrack, this.hotTrack);
 
     this.cursor = new THREE.Mesh(
       new THREE.RingGeometry(0.22, 0.32, 32).rotateX(-Math.PI / 2),
@@ -168,16 +110,14 @@ export class BuildController {
     );
     this.cursor.renderOrder = 6;
     this.cursor.visible = false;
-    this.scene.add(this.cursor);
+    this.startMark = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.18, 0.06, 24),
+      new THREE.MeshStandardMaterial({ color: 0xffd34d, roughness: 0.4, emissive: 0x6b4a00 }),
+    );
+    this.startMark.visible = false;
+    this.scene.add(this.cursor, this.startMark);
 
-    // Station ghost: a real platform model drawn in translucent green/red.
-    this.stationGhostMat = new THREE.MeshStandardMaterial({
-      color: GOOD,
-      transparent: true,
-      opacity: 0.55,
-      depthWrite: false,
-      emissive: 0x1d5a35,
-    });
+    this.stationGhostMat = new THREE.MeshStandardMaterial({ color: GOOD, transparent: true, opacity: 0.55, depthWrite: false, emissive: 0x1d5a35 });
     this.stationGhost = makePlatform(0xffffff);
     this.stationGhost.traverse((o) => {
       if (o.isMesh) {
@@ -190,28 +130,28 @@ export class BuildController {
     this.scene.add(this.stationGhost);
   }
 
-  #clearGhostTrack() {
-    for (const m of this.ghostTrack.children) m.geometry.dispose();
-    this.ghostTrack.clear();
+  #clear(group) {
+    for (const m of group.children) m.geometry.dispose();
+    group.clear();
   }
 
-  #drawGhostTrack(samples, ok) {
-    this.#clearGhostTrack();
-    if (!samples) return;
+  #drawGhostTrack(curve, ok) {
+    this.#clear(this.ghostTrack);
+    if (!curve) return;
+    const pts = curve.getSpacedPoints(Math.max(8, Math.ceil(curve.getLength() / 0.2)));
     this.bedMat.color.copy(ok ? GOOD : BAD);
-    this.ghostTrack.add(new THREE.Mesh(ribbon(samples, 0.7, 0, 0.04), this.bedMat));
-    for (const s of [-0.25, 0.25]) this.ghostTrack.add(new THREE.Mesh(ribbon(samples, 0.06, s, 0.06), this.railMat));
+    this.ghostTrack.add(new THREE.Mesh(ribbon(pts, 0.7, 0, 0.04), this.bedMat));
+    for (const s of [-0.25, 0.25]) this.ghostTrack.add(new THREE.Mesh(ribbon(pts, 0.06, s, 0.06), this.railMat));
     for (const m of this.ghostTrack.children) m.renderOrder = 5;
   }
 
-  #drawMarkers(hoverStart) {
-    this.markers.clear();
-    this.points.forEach((p, i) => {
-      const m = new THREE.Mesh(this.markerGeo, i === 0 ? this.startMat : this.markerMat);
-      m.position.set(p.x, 0.04, p.z);
-      if (i === 0) m.scale.setScalar(hoverStart ? 1.7 : 1.25);
-      this.markers.add(m);
-    });
+  #hideGhosts() {
+    this.#clear(this.ghostTrack);
+    this.#clear(this.hotTrack);
+    this.cursor.visible = false;
+    this.startMark.visible = false;
+    this.stationGhost.visible = false;
+    this.#unhighlight();
   }
 
   // ---------- Input ----------
@@ -227,22 +167,31 @@ export class BuildController {
     dom.addEventListener('pointerup', (e) => {
       const d = this.down;
       this.down = null;
-      if (!d || !this.tool || d.button !== 0) return;
+      if (!d) return;
       if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6) return; // that was a camera drag
+      if (d.button === 2 && this.tool === 'track') return this.#endChain();
+      if (d.button !== 0) return;
+      if (!this.tool) return this.#pick(e);
       this.#hover(e);
       this.#click();
     });
+    dom.addEventListener('contextmenu', (e) => this.tool && e.preventDefault());
     window.addEventListener('keydown', (e) => {
-      if (!this.tool) return;
-      if (e.key === 'Escape') this.setTool(null);
-      if (e.key === 'Backspace' || e.key === 'z' || e.key === 'Z') this.#undo();
+      if (e.key === 'Escape') {
+        if (this.tool === 'track' && this.chain) this.#endChain();
+        else if (this.tool) this.setTool(null);
+        else this.select(null);
+      }
     });
   }
 
-  #groundAt(e) {
+  #ndc(e) {
     const rect = this.dom.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-    this.raycaster.setFromCamera(ndc, this.camera);
+    return new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  }
+
+  #groundAt(e) {
+    this.raycaster.setFromCamera(this.#ndc(e), this.camera);
     return this.raycaster.ray.intersectPlane(this.ground, new THREE.Vector3());
   }
 
@@ -253,357 +202,607 @@ export class BuildController {
     if (this.tool === 'track') this.#previewTrack();
     else if (this.tool === 'station') this.#previewStation();
     else if (this.tool === 'demolish') this.#previewDemolish();
+    else if (this.tool === 'line') this.#previewLine();
   }
 
   #click() {
     if (this.tool === 'track') this.#clickTrack();
     else if (this.tool === 'station') this.#clickStation();
     else if (this.tool === 'demolish') this.#clickDemolish();
+    else if (this.tool === 'line') this.#clickLine();
   }
 
   setTool(tool) {
     if (this.tool === tool) tool = null;
     this.tool = tool;
-    this.points = [];
+    this.chain = null;
     this.plan = null;
-    this.#clearGhostTrack();
-    this.markers.clear();
-    this.cursor.visible = false;
-    this.stationGhost.visible = false;
-    this.#unhighlight();
+    this.#hideGhosts();
     this.#refreshTools();
-    if (tool === 'track') {
-      if (this.track) {
+    if (tool) this.select(null);
+    if (tool === 'track') this.#trackCard();
+    else if (tool === 'station') {
+      if (!this.network.edges.size) {
         this.tool = null;
         this.#refreshTools();
-        return this.#card('鋪鐵路', '島上已經有一條環線了。目前一次經營一條路線，可以用「拆除」把它移除後重新設計。', [
-          { label: '知道了', run: () => this.#card(null) },
-        ]);
+        return this.#card('蓋車站', '車站要蓋在鐵路旁，先用「鐵路」鋪一段軌道吧。', [{ label: '知道了', run: () => this.#card(null) }]);
       }
-      this.#previewTrack();
-    } else if (tool === 'station') {
-      if (!this.track) {
-        this.tool = null;
-        this.#refreshTools();
-        return this.#card('蓋車站', '車站要蓋在鐵路旁，先用「鐵路」鋪一條環線吧。', [{ label: '知道了', run: () => this.#card(null) }]);
-      }
-      this.#card('蓋車站', '把滑鼠移到鐵路旁，選擇要蓋在鐵路的哪一側，點一下就能蓋。車站需要一段平直的鐵路。');
+      this.#card('蓋車站', '移到鐵路旁，游標在哪一側就蓋在哪一側。車站需要一段 8 公尺以上的平直鐵路。');
+    } else if (tool === 'line') {
+      if (!this.editing) this.editing = this.lines[this.lines.length - 1] ?? null;
+      this.#lineCard();
     } else if (tool === 'demolish') {
-      this.#card('拆除', '點車站可以拆掉它，點鐵路會拆掉整條環線（連同車站）。拆除會退回一半的建造費。');
+      this.#card('拆除', '點一段鐵路或一個車站把它拆掉，退回一半的建造費。');
     } else this.#card(null);
   }
 
   // ---------- Track tool ----------
 
-  #snapped() {
-    const p = this.pointer;
-    return p && new THREE.Vector3(Math.round(p.x / SNAP) * SNAP, 0, Math.round(p.z / SNAP) * SNAP);
-  }
-
-  #nearStart(p) {
-    return this.points.length >= 3 && p && p.distanceTo(this.points[0]) < 0.9;
-  }
-
-  // Lay out and price a closed loop through `pts`.
-  #planTrack(pts) {
-    if (pts.length < 3) return null;
-    const { dense, minR } = roundLoop(pts);
-    const curve = new THREE.CatmullRomCurve3(dense, true, 'centripetal', 0.5);
-    curve.arcLengthDivisions = dense.length * 8;
-    const length = curve.getLength();
-    const n = Math.max(24, Math.ceil(length / 0.25));
-    const samples = curve.getSpacedPoints(n).slice(0, n);
-    const ds = length / n;
-    const problems = [];
-
-    if (minR < MIN_RADIUS) problems.push('彎道太急，把點拉開一點');
-
-    if (samples.some((p) => p.x * p.x + p.z * p.z > ISLAND_R * ISLAND_R)) problems.push('超出島的範圍');
-
-    const skip = Math.ceil(4 / ds);
-    let tooClose = false;
-    for (let i = 0; i < n && !tooClose; i += 2) {
-      for (let j = i + skip; j <= i + n - skip; j += 2) {
-        const p = samples[i];
-        const q = samples[j % n];
-        if ((p.x - q.x) ** 2 + (p.z - q.z) ** 2 < TRACK_GAP * TRACK_GAP) {
-          tooClose = true;
-          break;
-        }
-      }
+  // What a point snaps to: an existing node, a point on an edge, or open ground.
+  #snap(p) {
+    const node = this.network.nearestNode(p.x, p.z, SNAP_NODE);
+    if (node && node.edges.length < 3) return { node, pos: node.pos.clone() };
+    const ne = this.network.nearestEdge(p.x, p.z);
+    if (ne && ne.dist < SNAP_EDGE) {
+      const { edge, t } = ne;
+      if (t < 0.8 && edge.a.edges.length < 3) return { node: edge.a, pos: edge.a.pos.clone() };
+      if (t > edge.length - 0.8 && edge.b.edges.length < 3) return { node: edge.b, pos: edge.b.pos.clone() };
+      return { edge, t, pos: ne.pos };
     }
-    if (tooClose) problems.push('鐵路交叉或靠得太近');
+    return { pos: V(Math.round(p.x * 4) / 4, Math.round(p.z * 4) / 4) };
+  }
 
-    const props = this.scenery.query((x, z, r) => {
-      const rr = (CLEAR_R + r * 0.6) ** 2;
-      return samples.some((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < rr);
-    });
-    const cost = Math.round(length * COST.track) + props.reduce((sum, p) => sum + COST[p.kind], 0);
+  // Directions new track may leave from / arrive into a snapped point.
+  #outDirs(sn) {
+    if (sn.node) return sn.node.edges.map((e) => e.dirAt(sn.node).negate());
+    if (sn.edge) {
+      const t = sn.edge.tangentAt(sn.t);
+      return [t, t.clone().negate()];
+    }
+    return [];
+  }
+
+  #inDirs(sn) {
+    if (sn.node) return sn.node.edges.map((e) => e.dirAt(sn.node));
+    if (sn.edge) {
+      const t = sn.edge.tangentAt(sn.t);
+      return [t, t.clone().negate()];
+    }
+    return [];
+  }
+
+  #planSegment(start, end) {
+    const A = start.pos;
+    const B = end.pos;
+    const problems = [];
+    const len = A.distanceTo(B);
+    if (len < 1) return { start, end, curve: null, problems: ['太短了'], ok: false };
+    const chord = new THREE.Vector3().subVectors(B, A).normalize();
+    const sDir = start.dir ?? best(this.#outDirs(start), chord);
+    const eDir = best(this.#inDirs(end), chord);
+    let curve;
+    if (sDir && eDir) curve = joinCurve(A, sDir, B, eDir);
+    else if (sDir) curve = arcCurve(A, sDir, B);
+    else if (eDir) {
+      const back = arcCurve(B, eDir.clone().negate(), A);
+      curve = back && reverseCurve(back);
+    } else curve = straightCurve(A, B);
+    if (!curve) return { start, end, curve: null, problems: ['轉彎角度太大'], ok: false };
+
+    if ((start.node && start.node === end.node) || (start.edge && start.edge === end.edge)) problems.push('起點和終點不能在同一處');
+    if (minRadius(curve) < MIN_RADIUS) problems.push('彎道太急');
+    const length = curve.getLength();
+    const pts = curve.getSpacedPoints(Math.max(8, Math.ceil(length / 0.25)));
+    if (pts.some((p) => p.x * p.x + p.z * p.z > ISLAND_R * ISLAND_R)) problems.push('超出島的範圍');
+    for (const sn of [start, end]) {
+      if (sn.edge?.reservedBy || (sn.node && sn.node.reservedBy)) problems.push('列車正在使用接點的軌道');
+    }
+    // Keep clear of other track, except where this piece joins it.
+    const joinsA = start.node || start.edge;
+    const joinsB = end.node || end.edge;
+    const far = pts.filter((p) => !(joinsA && p.distanceTo(A) < JOIN_ZONE) && !(joinsB && p.distanceTo(B) < JOIN_ZONE));
+    const near = (p, q, r) => (p.x - q.x) ** 2 + (p.z - q.z) ** 2 < r * r;
+    if (far.some((p) => [...this.network.edges].some((e) => e.samples.some((q) => near(p, q, TRACK_GAP))))) problems.push('太靠近其他鐵路');
+    if (pts.some((p) => this.stations.some((s) => this.#onPlatformZone(s, p)))) problems.push('會壓到車站');
+
+    const props = this.scenery.query((x, z, r) => pts.some((p) => near(p, { x, z }, CLEAR_R + r * 0.6)));
+    const cost = Math.round(length * COST.track) + props.reduce((s, p) => s + COST[p.kind], 0);
     if (!problems.length && cost > this.passengers.money) problems.push('資金不足');
-    return { pts, dense, curve, length, samples, props, cost, problems, ok: !problems.length };
+    return { start, end, curve, length, props, cost, problems, ok: !problems.length };
+  }
+
+  #onPlatformZone(s, p) {
+    const local = s.group.worldToLocal(p.clone());
+    return local.x > 0.4 && local.x < PLATFORM_X + 0.85 && Math.abs(local.z) < 4.2;
   }
 
   #previewTrack() {
-    const cursor = this.#snapped();
-    const closing = this.#nearStart(cursor);
-    const pts = closing || !cursor ? [...this.points] : [...this.points, cursor];
-    this.plan = this.#planTrack(pts);
-    this.#drawGhostTrack(this.plan?.samples, this.plan?.ok);
-    this.#drawMarkers(closing);
-    if (cursor) {
-      this.cursor.visible = true;
-      this.cursor.position.set(cursor.x, 0.05, cursor.z);
-      this.cursor.material.color.set(closing ? 0xffd34d : 0xffffff);
+    if (!this.pointer) return;
+    const end = this.#snap(this.pointer);
+    this.cursor.visible = true;
+    this.cursor.position.set(end.pos.x, 0.06, end.pos.z);
+    this.cursor.material.color.set(end.node || end.edge ? 0xffd34d : 0xffffff);
+    if (!this.chain) {
+      this.#drawGhostTrack(null);
+      return this.#trackCard(end);
     }
-    this.#trackCard(closing);
+    this.plan = this.#planSegment(this.chain, end);
+    this.#drawGhostTrack(this.plan.curve, this.plan.ok);
+    this.#trackCard(end);
   }
 
-  #trackCard(closing) {
+  #trackCard(end) {
     const actions = [];
-    if (this.points.length) actions.push({ label: '復原', run: () => this.#undo() });
-    actions.push({ label: '取消', run: () => this.setTool(null) });
-    if (this.points.length >= 3) actions.push({ label: '完成環線', primary: true, run: () => this.#finishTrack() });
+    if (this.chain) actions.push({ label: '結束這段', run: () => this.#endChain() });
+    actions.push({ label: '完成', run: () => this.setTool(null) });
     let info;
-    if (this.points.length < 3) {
-      info = `在地上點出路線的轉折點（已放 ${this.points.length} 個），至少 3 個點會自動連成一圈。拖曳可以轉動視角。`;
+    if (!this.chain) {
+      info = end?.node || end?.edge
+        ? '點一下從這裡接出新的鐵路（黃圈代表接到現有軌道）。'
+        : '點一下開始鋪設，再點下一個位置拉出一段鐵路，可以一直接下去。從現有軌道的端點或中間點出去就能分岔。';
     } else {
       const p = this.plan;
-      info = `長度 ${p.length.toFixed(0)} 公尺・費用 <b>${money(p.cost)}</b>${this.#clearText(p.props)}`;
-      info += p.ok ? `<br>${closing ? '點黃色起點就能完成。' : '繼續加點，或按「完成環線」。'}` : `<br><span class="bad">${p.problems.join('、')}</span>`;
+      info = p?.curve ? `這段 ${p.length.toFixed(1)} 公尺・費用 <b>${money(p.cost)}</b>${this.#clearText(p.props)}` : '';
+      info += p?.ok ? '<br>點一下鋪設；右鍵或 Esc 結束這一段。' : `<br><span class="bad">${p?.problems.join('、') ?? ''}</span>`;
     }
     this.#card('鋪鐵路', info, actions);
   }
 
   #clearText(props) {
-    if (!props.length) return '';
+    if (!props?.length) return '';
     const counts = {};
     for (const p of props) counts[p.kind] = (counts[p.kind] ?? 0) + 1;
     return `<br>需清除 ${Object.entries(counts).map(([k, n]) => `${n} ${KIND_LABEL[k]}`).join('、')}`;
   }
 
   #clickTrack() {
-    const p = this.#snapped();
-    if (!p) return;
-    if (this.#nearStart(p)) return this.#finishTrack();
-    const last = this.points[this.points.length - 1];
-    if (last && last.distanceTo(p) < 0.4) return;
-    this.points.push(p);
-    this.#previewTrack();
-  }
-
-  #undo() {
-    if (this.tool !== 'track' || !this.points.length) return;
-    this.points.pop();
-    this.#previewTrack();
-  }
-
-  #finishTrack() {
-    const plan = this.#planTrack([...this.points]);
-    if (!plan?.ok) {
-      this.plan = plan;
-      return this.#trackCard(false);
+    const sn = this.#snap(this.pointer);
+    if (!this.chain) {
+      if (sn.edge?.reservedBy || sn.node?.reservedBy) return this.#card('鋪鐵路', '<span class="bad">列車正在使用這段軌道，等它開走再接。</span>');
+      this.chain = sn;
+      this.startMark.visible = true;
+      this.startMark.position.set(sn.pos.x, 0.04, sn.pos.z);
+      return this.#previewTrack();
     }
-    this.#buildTrack(plan, true);
-    this.setTool(null);
-    this.#card('鋪鐵路', `環線完成了！花費 ${money(plan.cost)}。接著用「車站」在鐵路旁蓋至少兩個車站。`, [
-      { label: '蓋車站', primary: true, run: () => this.setTool('station') },
-    ]);
+    const plan = this.#planSegment(this.chain, sn);
+    if (!plan.ok) return;
+    const edge = this.#commitSegment(plan, true);
+    // Carry on from the free end; joining existing track ends the run.
+    if (sn.node || sn.edge) this.#endChain();
+    else {
+      const node = edge.b;
+      this.chain = { node, pos: node.pos.clone(), dir: edge.dirAt(node).negate() };
+      this.startMark.position.set(node.pos.x, 0.04, node.pos.z);
+      this.#previewTrack();
+    }
   }
 
-  #buildTrack(plan, pay) {
+  #endChain() {
+    this.chain = null;
+    this.plan = null;
+    this.startMark.visible = false;
+    this.#drawGhostTrack(null);
+    this.#trackCard();
+  }
+
+  #resolve(sn) {
+    if (sn.node) return sn.node;
+    if (sn.edge) return this.network.splitEdge(sn.edge, sn.t);
+    return this.network.addNode(sn.pos);
+  }
+
+  #commitSegment(plan, pay) {
+    const a = this.#resolve(plan.start);
+    const b = this.#resolve(plan.end);
+    const c = plan.curve;
+    c.v0.copy(a.pos);
+    c.v3.copy(b.pos);
     if (pay) {
       this.passengers.spend(plan.cost);
-      this.#float(`-${money(plan.cost)}`, plan.samples[0]);
+      this.#float(`-${money(plan.cost)}`, c.getPoint(0.5));
     }
     this.scenery.remove(plan.props);
-    this.track = new Track(plan.dense);
-    this.track.corners = plan.pts.map((p) => p.clone());
-    this.trackCost = plan.cost;
-    this.scene.add(this.track.group);
-    this.passengers.setTrack(this.track);
+    const edge = this.network.addEdge(a, b, c, plan.cost);
     this.#changed();
+    return edge;
   }
 
   // ---------- Station tool ----------
 
-  #planStation(d, side) {
-    const track = this.track;
+  #planStation(p) {
+    const ne = this.network.nearestEdge(p.x, p.z);
+    if (!ne || ne.dist > 3.5) return null;
+    const { edge, t, pos } = ne;
+    const dir = edge.tangentAt(t);
+    const side = (p.x - pos.x) * dir.z - (p.z - pos.z) * dir.x >= 0 ? 1 : -1;
     const g = this.stationGhost;
-    placePlatform(g, track, d, side);
+    placePlatform(g, pos, dir, side);
     g.updateMatrixWorld(true);
     const problems = [];
-
-    const half = PLATFORM_LEN / 2;
-    const a = track.pointAt(d - half);
-    const b = track.pointAt(d + half);
-    const chord = new THREE.Line3(a, b);
-    const tmp = new THREE.Vector3();
-    let bend = 0;
-    for (let k = -half; k <= half; k += 0.5) {
-      const p = track.pointAt(d + k);
-      bend = Math.max(bend, chord.closestPointToPoint(p, true, tmp).distanceTo(p));
+    if (edge.reservedBy) problems.push('列車正在使用這段軌道');
+    const run = this.network.straightRun(edge, t, 4.2);
+    if (!run) problems.push('需要一段 8 公尺以上、沒有分岔的鐵路');
+    else {
+      const bend = Math.max(...run.map((q) => Math.abs((q.x - pos.x) * dir.z - (q.z - pos.z) * dir.x)));
+      if (bend > 0.12) problems.push('這段鐵路不夠直');
     }
-    if (bend > 0.15) problems.push('這段鐵路不夠直');
-
-    const L = track.length;
-    const gap = (x) => Math.abs(THREE.MathUtils.euclideanModulo(x - d + L / 2, L) - L / 2);
-    if (this.stations.some((s) => gap(s.d) < PLATFORM_LEN + 0.6)) problems.push('離其他車站太近');
-
-    const n = track.samples.length;
-    if (track.samples.some((p, i) => gap((i / n) * L) > half + 0.6 && platformContains(g, p.x, p.z, 0.3))) {
-      problems.push('會壓到鐵路');
-    }
-    for (const z of [-half, half]) {
-      const c = g.localToWorld(new THREE.Vector3(PLATFORM_X + 1.6, 0, z));
+    if (this.stations.some((s) => s.node.pos.distanceTo(pos) < 8.6)) problems.push('離其他車站太近');
+    const local = (q) => g.worldToLocal(q.clone());
+    const inZone = (q) => {
+      const l = local(q);
+      return l.x > 0.4 && l.x < PLATFORM_X + 1 && Math.abs(l.z) < 4.2;
+    };
+    if ([...this.network.edges].some((e) => e.samples.some(inZone))) problems.push('會壓到鐵路');
+    for (const z of [-4, 4]) {
+      const c = g.localToWorld(V(PLATFORM_X + 1.6, z));
       if (c.x * c.x + c.z * c.z > (ISLAND_R + 0.5) ** 2) {
         problems.push('超出島的範圍');
         break;
       }
     }
     if (this.stations.length >= MAX_STATIONS) problems.push(`最多 ${MAX_STATIONS} 個車站`);
-
-    const props = this.scenery.query((x, z, r) => platformContains(g, x, z, r * 0.6 + 0.5));
-    const cost = COST.station + props.reduce((sum, p) => sum + COST[p.kind], 0);
+    const props = this.scenery.query((x, z, r) => {
+      const l = local(V(x, z));
+      const m = r * 0.6 + 0.4;
+      return l.x > -0.6 - m && l.x < PLATFORM_X + 1.1 + m && Math.abs(l.z) < 4.2 + m;
+    });
+    const cost = COST.station + props.reduce((s, q) => s + COST[q.kind], 0);
     if (!problems.length && cost > this.passengers.money) problems.push('資金不足');
-    return { d, side, props, cost, problems, ok: !problems.length };
+    return { edge, t, pos, dir, side, props, cost, problems, ok: !problems.length };
   }
 
   #previewStation() {
-    const g = this.pointer;
-    const { d, dist } = this.track.nearest(g.x, g.z);
-    if (dist > 3.5) {
+    this.plan = this.#planStation(this.pointer);
+    if (!this.plan) {
       this.stationGhost.visible = false;
-      this.plan = null;
-      return this.#card('蓋車站', '把滑鼠移到鐵路旁，選擇要蓋在鐵路的哪一側，點一下就能蓋。車站需要一段平直的鐵路。');
+      return this.#card('蓋車站', '移到鐵路旁，游標在哪一側就蓋在哪一側。車站需要一段 8 公尺以上的平直鐵路。', [{ label: '完成', run: () => this.setTool(null) }]);
     }
-    const p = this.track.pointAt(d);
-    const t = this.track.tangentAt(d);
-    const side = (g.x - p.x) * t.z - (g.z - p.z) * t.x >= 0 ? 1 : -1;
-    this.plan = this.#planStation(d, side);
     this.stationGhost.visible = true;
     this.stationGhostMat.color.copy(this.plan.ok ? GOOD : BAD);
     this.stationGhostMat.emissive.set(this.plan.ok ? 0x1d5a35 : 0x6a1d1a);
-    const name = this.#nextName().name;
-    const info = `${name}・費用 <b>${money(this.plan.cost)}</b>${this.#clearText(this.plan.props)}` +
+    const info = `${this.#nextName().name}・費用 <b>${money(this.plan.cost)}</b>${this.#clearText(this.plan.props)}` +
       (this.plan.ok ? '<br>點一下蓋在這裡。' : `<br><span class="bad">${this.plan.problems.join('、')}</span>`);
     this.#card('蓋車站', info, [{ label: '完成', run: () => this.setTool(null) }]);
   }
 
   #nextName() {
     const used = new Set(this.stations.map((s) => s.name));
-    return STATION_NAMES.find((n) => !used.has(n.name)) ?? STATION_NAMES[this.stations.length % STATION_NAMES.length];
+    return STATION_NAMES.find((n) => !used.has(n.name)) ?? { name: `${this.stations.length + 1} 號站`, color: 0x888888 };
   }
 
   #clickStation() {
-    const plan = this.plan;
-    if (!plan?.ok) return;
-    this.#buildStation(plan, this.#nextName(), true);
+    if (!this.plan?.ok) return;
+    this.#buildStation(this.plan, this.#nextName(), true);
     this.#previewStation();
   }
 
   #buildStation(plan, def, pay) {
     if (pay) this.passengers.spend(plan.cost);
     this.scenery.remove(plan.props);
-    const s = new Station(def, this.track, plan.d, plan.side);
+    const node = this.network.splitEdge(plan.edge, plan.t);
+    const s = new Station(def, node, plan.dir, plan.side);
     this.passengers.addStation(s);
     if (pay) this.#float(`-${money(plan.cost)}`, s.local(PLATFORM_X, 1.2, 0));
+    // Until the player plans lines, every new station joins the first one.
+    if (!this.loading) {
+      if (!this.lines.length) this.#newLine(true);
+      const auto = this.lines.find((l) => l.auto);
+      if (auto) {
+        auto.stations.push(s);
+        this.passengers.setLines(this.lines);
+        if (auto.stations.length === 2 && !this.trains.length) this.buyTrain(auto);
+      }
+    }
     this.#changed();
     return s;
+  }
+
+  // ---------- Lines and trains ----------
+
+  #newLine(auto = false) {
+    const used = new Set(this.lines.map((l) => l.color));
+    const color = LINE_COLORS.find((c) => !used.has(c)) ?? LINE_COLORS[this.lines.length % LINE_COLORS.length];
+    const line = { name: `路線 ${this.lines.length + 1}`, color, stations: [], auto };
+    this.lines.push(line);
+    this.editing = line;
+    return line;
+  }
+
+  #lineCard() {
+    const actions = this.lines.map((l) => ({
+      label: l.name,
+      dot: l.color,
+      on: l === this.editing,
+      run: () => {
+        this.editing = l;
+        this.#lineCard();
+      },
+    }));
+    actions.push({ label: '＋ 新路線', run: () => (this.#newLine(), this.#changed(), this.#lineCard()) });
+    let info = '依序點車站排出路線，列車會照順序繞行，最後回到第一站；終點站會折返。';
+    if (this.editing) {
+      const names = this.editing.stations.map((s) => s.name);
+      info += `<br><b class="line-name" style="color:#${new THREE.Color(this.editing.color).getHexString()}">${this.editing.name}</b>：${names.length ? names.join(' → ') : '還沒有車站'}`;
+      if (names.length >= 2) info += ` → ${names[0]}`;
+      actions.push({ label: '清空', run: () => this.#editLine((l) => (l.stations = [])) });
+      if (this.editing.stations.length) actions.push({ label: '退一站', run: () => this.#editLine((l) => l.stations.pop()) });
+    }
+    actions.push({ label: '完成', primary: true, run: () => this.setTool(null) });
+    this.#card('路線', info, actions);
+  }
+
+  #editLine(fn) {
+    const l = this.editing;
+    if (!l) return;
+    fn(l);
+    l.auto = false;
+    this.passengers.setLines(this.lines);
+    this.#changed();
+    this.#lineCard();
+  }
+
+  #stationAt(p, margin = 0.3) {
+    return this.stations.find((s) => s.contains(p.x, p.z, margin));
+  }
+
+  #previewLine() {
+    this.#unhighlight();
+    const s = this.#stationAt(this.pointer, 0.6);
+    if (s) {
+      this.hot = { station: s };
+      s.highlight(0x1d4a7a);
+    }
+  }
+
+  #clickLine() {
+    const s = this.#stationAt(this.pointer, 0.6);
+    if (!s) return;
+    if (!this.editing) this.#newLine();
+    if (this.editing.stations[this.editing.stations.length - 1] === s) return;
+    this.#editLine((l) => l.stations.push(s));
+  }
+
+  buyTrain(line) {
+    if (this.trains.length >= MAX_TRAINS) return this.#toast(`最多 ${MAX_TRAINS} 台列車`);
+    if (line.stations.length < 2) return this.#toast('路線至少要有兩個車站');
+    if (!this.passengers.spend(COST.train)) return this.#toast('資金不足');
+    const t = new Train(this.scene, this.network, this.newType);
+    t.line = line;
+    this.passengers.addTrain(t);
+    if (this.passengers.placeTrain(t)) this.#float(`-${money(COST.train)}`, t.position.clone().setY(1.2));
+    this.#changed();
+    return t;
+  }
+
+  sellTrain(t) {
+    if (this.selected === t) this.select(null);
+    this.passengers.removeTrain(t);
+    this.passengers.earn(COST.train / 2);
+    this.#changed();
   }
 
   // ---------- Demolish tool ----------
 
   #unhighlight() {
     if (this.hot?.station) this.hot.station.highlight(null);
-    if (this.hot?.track) this.#tintTrack(null);
+    this.#clear(this.hotTrack);
     this.hot = null;
-  }
-
-  #tintTrack(color) {
-    this.track?.group.traverse((o) => {
-      if (o.isMesh) o.material.emissive?.set(color ?? 0x000000);
-    });
-  }
-
-  #refund() {
-    return Math.round(this.trackCost / 2 + (this.stations.length * COST.station) / 2);
   }
 
   #previewDemolish() {
     const g = this.pointer;
     this.#unhighlight();
-    const station = this.stations.find((s) => s.contains(g.x, g.z, 0.05));
+    const station = this.#stationAt(g, 0.05);
     if (station) {
       this.hot = { station };
       station.highlight(0x8a1a12);
       return this.#card('拆除', `拆除${station.name}，退回 ${money(COST.station / 2)}。`);
     }
-    if (this.track && this.track.nearest(g.x, g.z).dist < 0.6) {
-      this.hot = { track: true };
-      this.#tintTrack(0x8a1a12);
-      const n = this.stations.length;
-      return this.#card('拆除', `拆除整條環線${n ? `和 ${n} 個車站` : ''}，退回 ${money(this.#refund())}。`);
+    const ne = this.network.nearestEdge(g.x, g.z);
+    if (ne && ne.dist < 0.6) {
+      this.hot = { edge: ne.edge };
+      const m = new THREE.Mesh(ribbon(ne.edge.samples, 0.8, 0, 0.16), this.hotMat);
+      m.renderOrder = 6;
+      this.hotTrack.add(m);
+      return this.#card('拆除', `拆除這段 ${ne.edge.length.toFixed(1)} 公尺的鐵路，退回 ${money(ne.edge.cost / 2)}。`);
     }
-    this.#card('拆除', '點車站可以拆掉它，點鐵路會拆掉整條環線（連同車站）。拆除會退回一半的建造費。');
+    this.#card('拆除', '點一段鐵路或一個車站把它拆掉，退回一半的建造費。');
   }
 
   #clickDemolish() {
     const hot = this.hot;
     if (!hot) return;
-    if (this.passengers.busy) {
-      return this.#card('拆除', '<span class="bad">列車正在停靠上下客，等它開走再拆。</span>');
+    if (hot.station) {
+      if (!this.#removeStation(hot.station)) return this.#card('拆除', '<span class="bad">列車正停在這個車站，等它開走再拆。</span>');
+    } else {
+      const e = hot.edge;
+      if (e.reservedBy) return this.#card('拆除', '<span class="bad">列車正在使用或即將經過這段鐵路，等它開走再拆。</span>');
+      this.#unhighlight();
+      const at = e.pointAt(e.length / 2);
+      this.network.removeEdge(e);
+      this.passengers.earn(e.cost / 2);
+      this.#float(`+${money(e.cost / 2)}`, at.setY(1), '#4a90c8');
+      // A station left with no track at all goes too.
+      for (const s of [...this.stations]) if (!s.node.edges.length) this.#removeStation(s);
     }
     this.#unhighlight();
-    if (hot.station) {
-      const at = hot.station.local(PLATFORM_X, 1.2, 0);
-      this.passengers.removeStation(hot.station);
-      this.passengers.earn(COST.station / 2);
-      this.#float(`+${money(COST.station / 2)}`, at, '#4a90c8');
-    } else {
-      const refund = this.#refund();
-      const at = this.track.pointAt(0);
-      this.passengers.setTrack(null);
-      this.track.dispose();
-      this.track = null;
-      this.trackCost = 0;
-      this.passengers.earn(refund);
-      this.#float(`+${money(refund)}`, at.setY(1), '#4a90c8');
-    }
     this.#changed();
     this.#previewDemolish();
+  }
+
+  #removeStation(s) {
+    const at = s.local(PLATFORM_X, 1.2, 0);
+    for (const l of this.lines) l.stations = l.stations.filter((x) => x !== s);
+    this.passengers.setLines(this.lines);
+    if (!this.passengers.removeStation(s)) return false;
+    if (!s.node.edges.length) this.network.nodes.delete(s.node);
+    this.passengers.earn(COST.station / 2);
+    this.#float(`+${money(COST.station / 2)}`, at, '#4a90c8');
+    if (this.hot?.station === s) this.hot = null;
+    return true;
+  }
+
+  // ---------- Picking trains and robots ----------
+
+  #pick(e) {
+    this.raycaster.setFromCamera(this.#ndc(e), this.camera);
+    const targets = [];
+    for (const t of this.trains) for (const v of t.vehicles) targets.push([v.group, t]);
+    for (const r of this.passengers.robots) targets.push([r.mesh, r]);
+    let hit = null;
+    for (const [obj, owner] of targets) {
+      const h = this.raycaster.intersectObject(obj, true)[0];
+      if (h && (!hit || h.distance < hit.distance)) hit = { distance: h.distance, owner };
+    }
+    this.select(hit?.owner ?? null);
+  }
+
+  select(x) {
+    this.selected = x;
+    this.renderInfo();
+  }
+
+  // Info card for the selected train or robot; refreshed by main.
+  renderInfo() {
+    const { info } = this.ui;
+    const x = this.selected;
+    if (!x || (x instanceof Train && !this.trains.includes(x))) {
+      info.hidden = true;
+      this.selected = null;
+      return;
+    }
+    info.hidden = false;
+    if (x instanceof Train) {
+      const key = `t${x.no}${x.state}${x.type}${x.carCount}${x.onboard.length}${x.waitReason}${x.line?.name}`;
+      if (info.dataset.key === key) return;
+      info.dataset.key = key;
+      const stopped = x.state === 'dwell';
+      info.innerHTML = `
+        <div class="info-title"><span class="dot" style="background:#${new THREE.Color(x.line?.color ?? 0x999999).getHexString()}"></span>${x.name}<small>${x.line?.name ?? ''}</small></div>
+        <div class="info-row">${this.passengers.trainStatus(x)}</div>
+        <div class="info-row">乘客 ${x.onboard.length} / ${x.capacity}・${x.carCount} 節</div>
+        <div class="row seg info-types">${Object.entries(TRAIN_TYPES).map(([k, t]) => `<button data-type="${k}" class="${k === x.type ? 'on' : ''}" ${stopped ? '' : 'disabled'}>${t.label}</button>`).join('')}</div>
+        <div class="row"><button data-act="add" ${stopped ? '' : 'disabled'}>＋ 車廂</button><button data-act="remove" ${stopped ? '' : 'disabled'}>－ 車廂</button></div>
+        <div class="row"><button data-act="follow">🎥 跟隨</button><button data-act="sell">賣掉（退 ${money(COST.train / 2)}）</button></div>
+        ${stopped ? '' : '<div class="hint">列車停靠時可以換車種、加減車廂</div>'}`;
+      info.querySelectorAll('[data-type]').forEach((b) =>
+        b.addEventListener('click', () => {
+          x.setType(b.dataset.type);
+          this.passengers.reseat(x);
+          this.#changed();
+          this.renderInfo();
+        }),
+      );
+      info.querySelector('[data-act="add"]').addEventListener('click', () => (x.addCar(), this.passengers.reseat(x), this.renderInfo()));
+      info.querySelector('[data-act="remove"]').addEventListener('click', () => (x.removeCar(), this.passengers.reseat(x), this.renderInfo()));
+      info.querySelector('[data-act="follow"]').addEventListener('click', () => this.ui.onFollow?.(x));
+      info.querySelector('[data-act="sell"]').addEventListener('click', () => this.sellTrain(x));
+    } else {
+      const P = x.personality;
+      const doing = {
+        strolling: '散步中',
+        returning: `走去${x.target?.name ?? '車站'}`,
+        waiting: `在${x.origin?.name ?? '月台'}等車，要去${x.dest?.name ?? ''}`,
+        riding: `搭車中，要去${x.dest?.name ?? ''}`,
+        leaving: '剛下車',
+      }[x.state] ?? '閒晃中';
+      const key = `r${x.name}${doing}`;
+      if (info.dataset.key === key) return;
+      info.dataset.key = key;
+      info.innerHTML = `
+        <div class="info-title">${x.name}<small>${P ? P.label : ''}</small></div>
+        ${P ? `<div class="info-row muted-row">${P.desc}</div>` : ''}
+        <div class="info-row">${doing}</div>
+        ${x.itemLabel ? `<div class="info-row">隨身物品：${x.itemLabel}</div>` : ''}`;
+    }
   }
 
   // ---------- Quick start ----------
 
   quickStart() {
-    if (this.track) return;
-    const plan = this.#planTrack(DEMO.points.map(([x, z]) => new THREE.Vector3(x, 0, z)));
-    const total = plan.cost + DEMO.stations.length * COST.station;
-    if (total > this.passengers.money) return this.#card('範例路線', `<span class="bad">資金不足，需要 ${money(total)}。</span>`);
-    this.setTool(null);
-    this.#buildTrack(plan, true);
-    let spent = plan.cost;
-    for (const [x, z] of DEMO.stations) {
-      // Platforms on the outside of the loop, facing the island's shore.
-      const d = this.track.nearest(x, z).d;
-      const t = this.track.tangentAt(d);
-      const sp = this.#planStation(d, t.z * x - t.x * z >= 0 ? 1 : -1);
-      this.#buildStation(sp, this.#nextName(), true);
-      spent += sp.cost;
+    if (this.network.edges.size) return;
+    const steps = [];
+    const run = (points, closeTo = null) => {
+      let chain = { pos: V(...points[0]) };
+      for (let i = 1; i < points.length; i++) {
+        const end = { pos: V(...points[i]) };
+        const plan = this.#planSegment(chain, end);
+        if (!plan.ok) throw new Error(`demo ${i}: ${plan.problems}`);
+        const edge = this.#commitSegment(plan, true);
+        steps.push(plan.cost);
+        chain = { node: edge.b, pos: edge.b.pos.clone(), dir: edge.dirAt(edge.b).negate() };
+      }
+      if (closeTo) {
+        const plan = this.#planSegment(chain, this.#snap(V(...closeTo)));
+        if (!plan.ok) throw new Error(`demo close: ${plan.problems}`);
+        this.#commitSegment(plan, true);
+        steps.push(plan.cost);
+      }
+    };
+    const station = (x, z, sx, sz) => {
+      const plan = this.#planStation(V(sx, sz));
+      if (!plan?.ok) throw new Error(`demo station ${x},${z}: ${plan?.problems}`);
+      steps.push(plan.cost);
+      return this.#buildStation(plan, this.#nextName(), true);
+    };
+    // The demo is a gift: building it costs nothing.
+    const funds = this.passengers.money;
+    this.passengers.money = Infinity;
+    this.gift = true;
+    try {
+      this.loading = true; // no automatic line while laying out
+      this.setTool(null);
+      run([[10, -6], [10, 6], [6, 10], [-6, 10], [-10, 6], [-10, -6], [-6, -10], [6, -10]], [10, -6]);
+      // A branch line off the west side to a terminus inside the loop.
+      const p1 = this.#planSegment(this.#snap(V(-10, 3)), { pos: V(-6, -1) });
+      if (!p1.ok) throw new Error(`demo branch: ${p1.problems}`);
+      run2.call(this, this.#commitSegment(p1, true), [4, -1]);
+      const a = station(10, 0, 11.2, 0);
+      const b = station(0, 10, 0, 11.2);
+      const c = station(0, -10, 0, -11.2);
+      const d = station(-0.5, -1, -0.5, -2.2);
+      this.loading = false;
+      this.lines = [];
+      const l1 = this.#newLine();
+      l1.stations = [a, b, c];
+      const l2 = this.#newLine();
+      l2.stations = [b, d];
+      this.passengers.setLines(this.lines);
+      this.newType = 'steam';
+      this.buyTrain(l1);
+      this.newType = 'tram';
+      this.buyTrain(l2);
+      this.newType = 'steam';
+      this.#card('範例路線', '已經蓋好一條環線、一條支線和 4 個車站，兩條路線各有一台列車。號誌會讓它們輪流通過共用的軌道。', [
+        { label: '好', primary: true, run: () => this.#card(null) },
+      ]);
+    } catch (err) {
+      console.warn(err);
+      this.loading = false;
     }
-    this.#card('範例路線', `已經照範例鋪好環線和 3 個車站，共花費 ${money(spent)}。`, [
-      { label: '好', primary: true, run: () => this.#card(null) },
-    ]);
+    this.passengers.money = funds;
+    this.gift = false;
+    this.passengers.earn(0);
+    this.#changed();
+    function run2(edge, to) {
+      const chain = { node: edge.b, pos: edge.b.pos.clone(), dir: edge.dirAt(edge.b).negate() };
+      const plan = this.#planSegment(chain, { pos: V(...to) });
+      if (!plan.ok) throw new Error(`demo branch 2: ${plan.problems}`);
+      this.#commitSegment(plan, true);
+    }
   }
 
   // ---------- Save / load (this browser only) ----------
 
   save() {
     if (this.loading) return;
+    const net = this.network.serialize();
+    const sIndex = new Map(this.stations.map((s, i) => [s, i]));
     const data = {
-      points: this.track?.corners.map((p) => [p.x, p.z]) ?? null,
-      trackCost: this.trackCost,
-      stations: this.stations.map((s) => ({ d: s.d, side: s.side, name: s.name })),
+      network: { nodes: net.nodes, edges: net.edges },
+      stations: this.stations.map((s) => ({ node: net.index.get(s.node), dir: [s.dir.x, s.dir.z], side: s.side, name: s.name })),
+      lines: this.lines.map((l) => ({ name: l.name, color: l.color, auto: l.auto, stations: l.stations.map((s) => sIndex.get(s)) })),
+      trains: this.trains.map((t) => ({ line: this.lines.indexOf(t.line), type: t.type, mids: t.mids.length })),
       money: this.passengers.money,
       delivered: this.passengers.delivered,
     };
@@ -617,19 +816,39 @@ export class BuildController {
     try {
       data = JSON.parse(localStorage.getItem(SAVE_KEY));
     } catch {}
-    if (!data) return false;
+    if (!data?.network) return false;
     this.loading = true;
-    if (data.points?.length >= 3) {
-      const plan = this.#planTrack(data.points.map(([x, z]) => new THREE.Vector3(x, 0, z)));
-      this.#buildTrack(plan, false);
-      this.trackCost = data.trackCost ?? plan.cost;
-      for (const st of data.stations ?? []) {
-        const def = STATION_NAMES.find((n) => n.name === st.name) ?? this.#nextName();
-        this.#buildStation(this.#planStation(st.d, st.side), def, false);
+    try {
+      const nodes = this.network.load(data.network);
+      // Clear scenery under the saved track and stations.
+      for (const e of this.network.edges) {
+        this.scenery.remove(this.scenery.query((x, z, r) => e.samples.some((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < (CLEAR_R + r * 0.6) ** 2)));
       }
+      const stations = (data.stations ?? []).map((st) => {
+        const def = STATION_NAMES.find((n) => n.name === st.name) ?? this.#nextName();
+        const s = new Station(def, nodes[st.node], V(st.dir[0], st.dir[1]), st.side);
+        this.scenery.remove(this.scenery.query((x, z, r) => s.contains(x, z, r * 0.6 + 0.4)));
+        this.passengers.addStation(s);
+        return s;
+      });
+      this.lines = (data.lines ?? []).map((l) => ({ name: l.name, color: l.color, auto: l.auto, stations: l.stations.map((i) => stations[i]).filter(Boolean) }));
+      this.editing = this.lines[0] ?? null;
+      this.passengers.setLines(this.lines);
+      if (Number.isFinite(data.money)) this.passengers.money = data.money;
+      if (Number.isFinite(data.delivered)) this.passengers.delivered = data.delivered;
+      for (const td of data.trains ?? []) {
+        const line = this.lines[td.line];
+        if (!line) continue;
+        const t = new Train(this.scene, this.network, td.type in TRAIN_TYPES ? td.type : 'steam');
+        while (t.mids.length < td.mids) t.addCar();
+        while (t.mids.length > td.mids) t.removeCar();
+        t.line = line;
+        this.passengers.addTrain(t);
+        this.passengers.placeTrain(t);
+      }
+    } catch (err) {
+      console.warn('Could not load the saved game', err);
     }
-    if (Number.isFinite(data.money)) this.passengers.money = data.money;
-    if (Number.isFinite(data.delivered)) this.passengers.delivered = data.delivered;
     this.loading = false;
     this.#changed();
     return true;
@@ -650,15 +869,52 @@ export class BuildController {
     for (const b of tools.querySelectorAll('[data-tool]')) b.addEventListener('click', () => this.setTool(b.dataset.tool));
     quick.addEventListener('click', () => this.quickStart());
     this.#refreshTools();
+    this.#renderLines();
   }
 
   #refreshTools() {
     const { tools, quick } = this.ui;
     for (const b of tools.querySelectorAll('[data-tool]')) {
       b.classList.toggle('on', b.dataset.tool === this.tool);
-      b.classList.toggle('dim', (b.dataset.tool === 'track' && !!this.track) || (b.dataset.tool === 'station' && !this.track));
+      b.classList.toggle('dim', (b.dataset.tool === 'station' || b.dataset.tool === 'line') && !this.network.edges.size);
     }
-    quick.hidden = !!this.track;
+    quick.hidden = this.network.edges.size > 0;
+  }
+
+  // Lines and their trains in the side panel.
+  #renderLines() {
+    const el = this.ui.lines;
+    if (!el) return;
+    if (!this.lines.length) {
+      el.innerHTML = '<div class="hint">蓋好車站後，用「路線」把它們串起來，再加開列車。</div>';
+      return;
+    }
+    el.replaceChildren(
+      ...this.lines.map((l) => {
+        const row = document.createElement('div');
+        row.className = 'line-row';
+        const n = this.trains.filter((t) => t.line === l).length;
+        row.innerHTML = `<span class="dot" style="background:#${new THREE.Color(l.color).getHexString()}"></span>
+          <span class="line-stops"><b>${l.name}</b>${l.stations.map((s) => s.name.replace('站', '')).join('→') || '還沒有車站'}</span>
+          <span class="line-count">${n} 台</span>`;
+        const add = document.createElement('button');
+        add.className = 'mini';
+        add.textContent = '＋';
+        add.title = `加開列車（${money(COST.train)}）`;
+        add.addEventListener('click', () => this.buyTrain(l));
+        const sub = document.createElement('button');
+        sub.className = 'mini';
+        sub.textContent = '－';
+        sub.title = '賣掉一台';
+        sub.disabled = !n;
+        sub.addEventListener('click', () => {
+          const t = [...this.trains].reverse().find((x) => x.line === l);
+          if (t) this.sellTrain(t);
+        });
+        row.append(sub, add);
+        return row;
+      }),
+    );
   }
 
   #card(title, html, actions = []) {
@@ -672,17 +928,41 @@ export class BuildController {
         const b = document.createElement('button');
         b.textContent = a.label;
         if (a.primary) b.classList.add('primary');
+        if (a.on) b.classList.add('on');
+        if (a.dot !== undefined) b.style.setProperty('--dot', `#${new THREE.Color(a.dot).getHexString()}`), b.classList.add('has-dot');
         b.addEventListener('click', a.run);
         return b;
       }),
     );
   }
 
+  // For feature modules: a floating price tag, and extra toolbar buttons.
+  floatText(text, at, color) {
+    this.#float(text, at, color);
+  }
+
+  addTool({ id, icon, label, onSelect }) {
+    const b = document.createElement('button');
+    b.dataset.extTool = id;
+    b.innerHTML = `<i>${icon}</i>${label}`;
+    b.addEventListener('click', () => {
+      this.setTool(null);
+      onSelect?.(b);
+    });
+    this.ui.tools.insertBefore(b, this.ui.quick);
+    return b;
+  }
+
+  #toast(text) {
+    this.#card('提示', `<span class="bad">${text}</span>`, [{ label: '知道了', run: () => this.#card(null) }]);
+    return null;
+  }
+
   #float(text, at, color = '#e0533f') {
+    if (this.gift) return;
     const f = new FloatText(text, color);
     f.sprite.position.copy(at).add(new THREE.Vector3(0, 0.8, 0));
     f.sprite.scale.multiplyScalar(1.6);
     this.passengers.addFloater(f);
   }
 }
-

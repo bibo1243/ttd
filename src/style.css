@@ -91,3 +91,37 @@ button.ghost:hover { background: transparent; color: var(--accent); }
 #bcActions { display: flex; gap: 6px; }
 #bcActions:empty { display: none; }
 #bcActions button { padding: 6px 10px; font-size: 13px; }
+#bcActions { flex-wrap: wrap; }
+#bcActions button.has-dot::before { content: ''; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--dot); margin-right: 5px; vertical-align: 1px; }
+#bcInfo b.line-name { color: inherit; }
+
+/* Lines and trains */
+.section-label { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: -4px; }
+#lines { display: flex; flex-direction: column; gap: 4px; max-height: 32vh; overflow-y: auto; }
+.line-row { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 8px; border-radius: 10px; background: #f4f7f9; font-size: 12px; }
+.line-row .line-stops { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6a707c; }
+.line-row .line-stops b { color: var(--ink); margin-right: 6px; }
+.line-row .line-count { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dot { flex: 0 0 auto; display: inline-block; width: 10px; height: 10px; border-radius: 50%; box-shadow: inset 0 -1px 0 rgba(0,0,0,0.15); }
+button.mini { flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border-radius: 8px; font-size: 14px; background: #fff; }
+button:disabled { opacity: 0.4; cursor: default; transform: none; }
+.seg-label > span { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.seg-label .seg { flex: 1; display: flex; }
+
+/* Info card for a picked train or robot */
+#info {
+  position: fixed; top: 16px; right: 16px;
+  width: min(260px, calc(100vw - 32px));
+  padding: 12px 14px; border-radius: 16px;
+  background: var(--panel); backdrop-filter: blur(8px);
+  box-shadow: 0 6px 24px rgba(40, 70, 90, 0.18);
+  display: flex; flex-direction: column; gap: 8px; font-size: 13px;
+  user-select: none;
+}
+#info[hidden] { display: none; }
+.info-title { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 15px; }
+.info-title small { font-weight: 500; font-size: 12px; color: var(--muted); }
+.info-row { color: #555a66; }
+.muted-row { color: var(--muted); font-size: 12px; }
+#info button { padding: 6px 8px; font-size: 13px; }
+@media (max-width: 640px) { #info { top: auto; bottom: 120px; } }

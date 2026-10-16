@@ -397,6 +397,13 @@ export class Robot {
     this.speed = 0.9 + Math.random() * 0.25;
     this.scale = 1;
     this.idle = 0;
+    this.personality = look.personality ?? null;
+    this.bounce = this.personality?.bounce ?? 1;
+    this.hop = null; // current jump between levels
+  }
+
+  get jumping() {
+    return !!this.hop;
   }
 
   // The antenna tip lights up in the colour of the station it's heading to.
@@ -410,7 +417,8 @@ export class Robot {
   }
 
   walkTo(points, onArrive) {
-    this.path = points.map((p) => p.clone());
+    this.path = points.map((p) => Object.assign(p.clone(), { jump: !!p.jump }));
+    this.hop = null;
     this.onArrive = onArrive;
     this.idle = 0;
   }
@@ -444,10 +452,56 @@ export class Robot {
     }
   }
 
+  #face(dx, dz, dt) {
+    const want = Math.atan2(dx, dz);
+    const diff = THREE.MathUtils.euclideanModulo(want - this.mesh.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
+    this.mesh.rotation.y += diff * Math.min(1, dt * 12);
+  }
+
+  #reached() {
+    this.path.shift();
+    if (!this.path.length && this.onArrive) {
+      const cb = this.onArrive;
+      this.onArrive = null;
+      cb(this);
+    }
+  }
+
+  // A little jump up or down a level (onto a step, a platform, into a car).
+  #hopTo(target, dt, inner) {
+    const pos = this.mesh.position;
+    if (!this.hop) this.hop = { from: pos.clone(), t: 0, crouch: 0.12 };
+    const h = this.hop;
+    // Crouch briefly, then fly.
+    if (h.crouch > 0) {
+      h.crouch -= dt;
+      inner.scale.y = 0.82;
+      inner.position.y = 0;
+      this.#face(target.x - pos.x, target.z - pos.z, dt * 2);
+      return;
+    }
+    h.t = Math.min(1, h.t + dt / 0.36);
+    const k = h.t;
+    const lift = 0.12 + Math.max(0, target.y - h.from.y) * 1.1;
+    pos.lerpVectors(h.from, target, k);
+    pos.y = h.from.y + (target.y - h.from.y) * k + Math.sin(Math.PI * k) * lift;
+    inner.scale.y = 1 + Math.sin(Math.PI * k) * 0.12;
+    inner.position.y = 0;
+    inner.rotation.z = 0;
+    if (k >= 1) {
+      pos.copy(target);
+      inner.scale.y = 1;
+      this.hop = null;
+      this.#reached();
+    }
+  }
+
   update(dt, time) {
     const inner = this.mesh.userData.inner;
     for (const b of this.bobbers) b.rotation.z = Math.sin(time * 1.7 + this.phase) * 0.06;
-    if (this.path.length) {
+    if (this.path.length && this.path[0].jump) {
+      this.#hopTo(this.path[0], dt, inner);
+    } else if (this.path.length) {
       const target = this.path[0];
       const pos = this.mesh.position;
       const dx = target.x - pos.x;
@@ -456,22 +510,17 @@ export class Robot {
       const step = this.speed * dt;
       if (dist <= step) {
         pos.copy(target);
-        this.path.shift();
-        if (!this.path.length && this.onArrive) {
-          const cb = this.onArrive;
-          this.onArrive = null;
-          cb(this);
-        }
+        this.#reached();
       } else {
         pos.x += (dx / dist) * step;
         pos.z += (dz / dist) * step;
         pos.y += (target.y - pos.y) * Math.min(1, dt * 10);
-        const want = Math.atan2(dx, dz);
-        const diff = THREE.MathUtils.euclideanModulo(want - this.mesh.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
-        this.mesh.rotation.y += diff * Math.min(1, dt * 12);
+        this.#face(dx, dz, dt);
       }
-      inner.position.y = Math.abs(Math.sin(time * 13 + this.phase)) * 0.035;
-      inner.rotation.z = Math.sin(time * 13 + this.phase) * 0.12;
+      const b = this.bounce;
+      inner.position.y = Math.abs(Math.sin(time * 13 + this.phase)) * 0.035 * b;
+      inner.rotation.z = Math.sin(time * 13 + this.phase) * 0.12 * Math.min(1.3, b);
+      inner.scale.y = 1;
     } else if (this.seated) {
       inner.position.y = 0;
       inner.rotation.z = Math.sin(time * 3 + this.phase) * 0.03;

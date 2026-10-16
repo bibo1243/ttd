@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Train, TRAIN_TYPES } from './train.js';
+import { TRAIN_TYPES } from './train.js';
+import { Network } from './network.js';
 import { buildWorld } from './world.js';
 import { PassengerSystem } from './stations.js';
 import { BuildController } from './build.js';
 import { params, setupPerf } from './perf.js';
 import { batcher } from './batching.js';
+import { MODULES } from './modules.js';
 
 const app = document.getElementById('app');
 
@@ -58,77 +60,64 @@ scene.add(sun);
 const world = buildWorld(scene, { stress: params.has('stress') });
 const { clouds } = world;
 if (params.has('stress')) controls.maxDistance = 160;
-const train = new Train(null, scene, 'steam');
-const passengers = new PassengerSystem(scene, train, world.obstacles);
-const $id = (id) => document.getElementById(id);
+const network = new Network(scene);
+const passengers = new PassengerSystem(scene, network, world.obstacles);
+const $ = (id) => document.getElementById(id);
+let follow = null; // train the camera rides along with
 const builder = new BuildController({
   scene,
   camera,
   dom: renderer.domElement,
   passengers,
+  network,
   world,
   ui: {
-    tools: $id('tools'),
-    quick: $id('quick'),
-    card: $id('buildCard'),
-    cardTitle: $id('bcTitle'),
-    cardInfo: $id('bcInfo'),
-    cardActions: $id('bcActions'),
+    tools: $('tools'),
+    quick: $('quick'),
+    card: $('buildCard'),
+    cardTitle: $('bcTitle'),
+    cardInfo: $('bcInfo'),
+    cardActions: $('bcActions'),
+    lines: $('lines'),
+    info: $('info'),
+    onFollow: (t) => {
+      follow = follow === t ? null : t;
+      if (follow) {
+        const p = t.position;
+        camera.position.set(p.x + 6, p.y + 5, p.z + 6);
+      }
+    },
   },
 });
 
 // HUD
-const $ = (id) => document.getElementById(id);
-let running = true;
-let follow = false;
-let savedSpeed = train.speed;
-
 const speedInput = $('speed');
 const speedOut = $('speedOut');
-const updateCount = () => ($('carCount').textContent = `共 ${train.carCount} 節`);
-updateCount();
-
 speedInput.addEventListener('input', () => {
-  savedSpeed = parseFloat(speedInput.value);
-  speedOut.textContent = savedSpeed.toFixed(1);
+  passengers.cruise = parseFloat(speedInput.value);
+  speedOut.textContent = passengers.cruise.toFixed(1);
 });
 $('toggle').addEventListener('click', (e) => {
-  running = !running;
-  e.currentTarget.textContent = running ? '⏸ 暫停' : '▶ 出發';
+  passengers.paused = !passengers.paused;
+  e.currentTarget.textContent = passengers.paused ? '▶ 出發' : '⏸ 暫停';
 });
-$('camera').addEventListener('click', (e) => {
-  follow = !follow;
-  e.currentTarget.classList.toggle('on', follow);
-  e.currentTarget.textContent = follow ? '🎥 自由視角' : '🎥 跟隨火車';
-  if (follow) {
-    const p = train.track ? train.lead.group.position : controls.target;
-    camera.position.set(p.x + 6, p.y + 5, p.z + 6);
-  }
-});
+// Which kind of train the next purchase is.
 const typeBar = $('types');
 for (const [key, t] of Object.entries(TRAIN_TYPES)) {
   const btn = document.createElement('button');
   btn.textContent = t.label;
   btn.dataset.type = key;
-  btn.classList.toggle('on', key === train.type);
   btn.addEventListener('click', () => {
-    train.setType(key);
-    passengers.reseat();
+    builder.newType = key;
     for (const b of typeBar.children) b.classList.toggle('on', b.dataset.type === key);
-    updateCount();
   });
   typeBar.appendChild(btn);
 }
-$('addCar').addEventListener('click', () => {
-  train.addCar();
-  updateCount();
-  passengers.reseat();
-});
-$('removeCar').addEventListener('click', () => {
-  train.removeCar();
-  updateCount();
-  passengers.reseat();
-});
+const syncType = () => {
+  for (const b of typeBar.children) b.classList.toggle('on', b.dataset.type === builder.newType);
+};
+syncType();
+builder.onChange(syncType);
 
 // Collapsible dashboard; remembered per browser.
 const hud = $('hud');
@@ -151,7 +140,7 @@ window.addEventListener('keydown', (e) => {
 // Earnings panel. Money counts up smoothly toward the real total.
 let shownMoney = 0;
 const renderStats = () => {
-  $('riders').textContent = `${passengers.onboard.length} / ${passengers.capacity}`;
+  $('riders').textContent = `${passengers.onboardCount} / ${passengers.capacity}`;
   $('delivered').textContent = passengers.delivered;
   $('residents').textContent = passengers.residents;
   $('status').textContent = passengers.statusText;
@@ -161,6 +150,26 @@ builder.load();
 renderStats();
 shownMoney = passengers.money;
 $('money').textContent = $('miniMoney').textContent = `$${shownMoney.toLocaleString()}`;
+
+// Feature modules share one context (see modules.js).
+const game = {
+  scene,
+  camera,
+  renderer,
+  controls,
+  world,
+  network,
+  passengers,
+  builder,
+  money: {
+    get: () => passengers.money,
+    spend: (n) => passengers.spend(n),
+    earn: (n) => passengers.earn(n),
+    float: (text, at, color) => builder.floatText(text, at, color),
+  },
+  tools: { addTool: (t) => builder.addTool(t) },
+};
+for (const m of MODULES) m.init?.(game);
 
 // Saved in this browser: on every build, every few seconds, and on leaving.
 setInterval(() => builder.save(), 5000);
@@ -186,13 +195,10 @@ const clock = new THREE.Clock();
 const lastTarget = new THREE.Vector3();
 
 function simulate(dt, time) {
-  // Ease toward the target speed so starts and stops feel weighty.
-  const target = running ? savedSpeed * train.config.speedScale : 0;
-  train.speed += (target - train.speed) * Math.min(1, dt * 1.5);
-  if (Math.abs(train.speed) < 0.005) train.speed = 0;
   passengers.control(dt);
-  train.update(dt, time);
+  for (const t of passengers.trains) t.update(dt, time);
   passengers.update(dt, time);
+  for (const m of MODULES) m.update?.(dt, time);
   if (shownMoney !== passengers.money) {
     const diff = passengers.money - shownMoney;
     const step = Math.max(1, Math.ceil(Math.abs(diff) * dt * 6));
@@ -202,15 +208,17 @@ function simulate(dt, time) {
 }
 
 let simTime = 0;
+let infoTimer = 0;
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
   simTime += dt;
   const time = simTime;
   simulate(dt, time);
 
-  if (follow && train.track) {
+  if (follow && !passengers.trains.includes(follow)) follow = null;
+  if (follow) {
     lastTarget.copy(controls.target);
-    controls.target.lerp(train.lead.group.position, Math.min(1, dt * 4));
+    controls.target.lerp(follow.position, Math.min(1, dt * 4));
     camera.position.add(controls.target.clone().sub(lastTarget));
   }
 
@@ -219,6 +227,13 @@ function tick() {
     if (c.position.x > 45) c.position.x = -45;
   }
 
+  infoTimer -= dt;
+  if (infoTimer <= 0) {
+    infoTimer = 0.25;
+    builder.renderInfo();
+    renderStats();
+  }
+  for (const m of MODULES) m.frame?.(dt);
   controls.update();
   renderer.render(scene, camera);
   perf.frame();
@@ -233,5 +248,5 @@ const fastForward = (seconds) => {
     simulate(1 / 30, simTime);
   }
 };
-window.__game = { train, camera, controls, passengers, builder, world, fastForward };
+window.__game = { game, network, camera, controls, passengers, builder, world, fastForward };
 window.__perf = { ...perf, bench: (n) => perf.bench(() => renderer.render(scene, camera), n) };

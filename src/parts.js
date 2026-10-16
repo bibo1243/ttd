@@ -68,11 +68,13 @@ export class Vehicle {
     this.phase = Math.random() * Math.PI * 2;
   }
 
-  place(track, d, travelled, time) {
+  // flip: the car runs backwards (its train is reversing out of a terminus).
+  place(track, d, travelled, time, flip = false) {
     const front = track.pointAt(d + this.bogieOffset);
     const back = track.pointAt(d - this.bogieOffset);
     this.group.position.copy(front).add(back).multiplyScalar(0.5);
-    this.group.lookAt(front);
+    this.group.lookAt(flip ? back : front);
+    if (flip) travelled = -travelled;
     for (const w of this.wheels) w.obj.rotation.x = travelled / w.radius;
     if (this.doors) {
       const k = Math.min(1, (this.dt ?? 0.016) * 5);
