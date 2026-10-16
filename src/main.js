@@ -60,10 +60,10 @@ const track = new Track([
 scene.add(track.group);
 
 const stations = createStations(scene, track);
-const { clouds } = buildWorld(scene, track, stations);
+const { clouds, obstacles } = buildWorld(scene, track, stations);
 const train = new Train(track, scene, 'steam');
 train.distance = 6;
-const passengers = new PassengerSystem(scene, track, train, stations);
+const passengers = new PassengerSystem(scene, track, train, stations, obstacles);
 
 // HUD
 const $ = (id) => document.getElementById(id);
@@ -118,11 +118,30 @@ $('removeCar').addEventListener('click', () => {
   passengers.reseat();
 });
 
+// Collapsible dashboard; remembered per browser.
+const hud = $('hud');
+const setCollapsed = (on) => {
+  hud.classList.toggle('collapsed', on);
+  $('collapse').setAttribute('aria-expanded', String(!on));
+  $('collapse').title = on ? '展開面板 (H)' : '收合面板 (H)';
+  try {
+    localStorage.setItem('hudCollapsed', on ? '1' : '0');
+  } catch {}
+};
+try {
+  setCollapsed(localStorage.getItem('hudCollapsed') === '1');
+} catch {}
+$('collapse').addEventListener('click', () => setCollapsed(!hud.classList.contains('collapsed')));
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') setCollapsed(!hud.classList.contains('collapsed'));
+});
+
 // Earnings panel. Money counts up smoothly toward the real total.
 let shownMoney = 0;
 const renderStats = () => {
   $('riders').textContent = `${passengers.onboard.length} / ${passengers.capacity}`;
   $('delivered').textContent = passengers.delivered;
+  $('residents').textContent = passengers.residents;
   $('status').textContent = passengers.statusText;
 };
 passengers.onChange(renderStats);
@@ -148,7 +167,7 @@ function simulate(dt, time) {
   if (shownMoney !== passengers.money) {
     shownMoney += Math.max(1, Math.ceil((passengers.money - shownMoney) * dt * 6));
     shownMoney = Math.min(shownMoney, passengers.money);
-    $('money').textContent = `$${shownMoney.toLocaleString()}`;
+    $('money').textContent = $('miniMoney').textContent = `$${shownMoney.toLocaleString()}`;
   }
 }
 

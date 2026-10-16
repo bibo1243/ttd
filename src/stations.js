@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { Robot, randomLook } from './robots.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const PLATFORM_Y = 0.3;
 const PLATFORM_LEN = 8;
 const PLATFORM_X = 0.95; // platform centre, measured outward from the rails
+const RAMP_Z = [-2.25, 2.25];
 
 const flat = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
 
@@ -123,155 +125,6 @@ class FloatText {
   }
 }
 
-// ---------- Robots ----------
-
-const G = {
-  body: new RoundedBoxGeometry(0.16, 0.13, 0.12, 2, 0.04),
-  head: new RoundedBoxGeometry(0.19, 0.14, 0.15, 3, 0.055),
-  visor: new RoundedBoxGeometry(0.15, 0.075, 0.02, 2, 0.03),
-  eye: new THREE.SphereGeometry(0.016, 10, 8),
-  stalk: new THREE.CylinderGeometry(0.006, 0.006, 0.06, 6),
-  ball: new THREE.SphereGeometry(0.02, 10, 8),
-  leg: new THREE.CapsuleGeometry(0.022, 0.03, 4, 8),
-  arm: new THREE.SphereGeometry(0.03, 10, 8),
-};
-const RM = {
-  white: new THREE.MeshPhysicalMaterial({ color: 0xf6f7f9, roughness: 0.3, clearcoat: 0.5 }),
-  visor: new THREE.MeshStandardMaterial({ color: 0x1d2733, roughness: 0.1, metalness: 0.5 }),
-  eye: new THREE.MeshStandardMaterial({ color: 0x9ff3ff, emissive: 0x4fe0ff, emissiveIntensity: 1.6 }),
-  dark: new THREE.MeshStandardMaterial({ color: 0x3a3f4a, roughness: 0.6 }),
-};
-const paintCache = new Map();
-const paint = (color) => {
-  if (!paintCache.has(color)) {
-    paintCache.set(color, new THREE.MeshPhysicalMaterial({ color, roughness: 0.35, clearcoat: 0.4 }));
-  }
-  return paintCache.get(color);
-};
-const glowCache = new Map();
-const glow = (color) => {
-  if (!glowCache.has(color)) {
-    glowCache.set(color, new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8 }));
-  }
-  return glowCache.get(color);
-};
-
-function makeRobot(color) {
-  const g = new THREE.Group();
-  const inner = new THREE.Group(); // hops and sways
-  g.add(inner);
-  const legs = [];
-  const body = new THREE.Mesh(G.body, paint(color));
-  body.position.y = 0.13;
-  const head = new THREE.Mesh(G.head, RM.white);
-  head.position.y = 0.27;
-  const visor = new THREE.Mesh(G.visor, RM.visor);
-  visor.position.set(0, 0.275, 0.07);
-  inner.add(body, head, visor);
-  for (const side of [-1, 1]) {
-    const eye = new THREE.Mesh(G.eye, RM.eye);
-    eye.position.set(side * 0.035, 0.278, 0.082);
-    eye.scale.set(1, 1.3, 0.5);
-    const leg = new THREE.Mesh(G.leg, RM.dark);
-    leg.position.set(side * 0.045, 0.045, 0);
-    const arm = new THREE.Mesh(G.arm, paint(color));
-    arm.position.set(side * 0.1, 0.14, 0);
-    arm.scale.set(0.8, 1.2, 0.8);
-    inner.add(eye, leg, arm);
-    legs.push(leg);
-  }
-  const stalk = new THREE.Mesh(G.stalk, RM.dark);
-  stalk.position.y = 0.37;
-  const ball = new THREE.Mesh(G.ball, glow(color));
-  ball.position.y = 0.41;
-  inner.add(stalk, ball);
-  g.userData.inner = inner;
-  g.userData.legs = legs;
-  shadowed(g);
-  // Robots ride inside cars, where the roof's shadow would make them murky.
-  g.traverse((c) => (c.receiveShadow = false));
-  return g;
-}
-
-class Robot {
-  constructor(dest, origin, color) {
-    this.dest = dest;
-    this.origin = origin;
-    this.mesh = makeRobot(color);
-    this.path = [];
-    this.onArrive = null;
-    this.phase = Math.random() * 10;
-    this.speed = 0.9 + Math.random() * 0.25;
-    this.scale = 1;
-  }
-
-  walkTo(points, onArrive) {
-    this.path = points.map((p) => p.clone());
-    this.onArrive = onArrive;
-  }
-
-  sit(seat) {
-    this.seated = true;
-    this.path = [];
-    this.mesh.position.copy(seat.pos);
-    this.mesh.rotation.y = 0;
-    for (const leg of this.mesh.userData.legs) {
-      leg.rotation.x = Math.PI / 2;
-      leg.position.set(leg.position.x, 0.072, 0.055);
-    }
-  }
-
-  stand() {
-    this.seated = false;
-    for (const leg of this.mesh.userData.legs) {
-      leg.rotation.x = 0;
-      leg.position.set(leg.position.x, 0.045, 0);
-    }
-  }
-
-  update(dt, time) {
-    const inner = this.mesh.userData.inner;
-    if (this.path.length) {
-      const target = this.path[0];
-      const pos = this.mesh.position;
-      const dx = target.x - pos.x;
-      const dz = target.z - pos.z;
-      const dist = Math.hypot(dx, dz);
-      const step = this.speed * dt;
-      if (dist <= step) {
-        pos.copy(target);
-        this.path.shift();
-        if (!this.path.length && this.onArrive) {
-          const cb = this.onArrive;
-          this.onArrive = null;
-          cb(this);
-        }
-      } else {
-        pos.x += (dx / dist) * step;
-        pos.z += (dz / dist) * step;
-        pos.y += (target.y - pos.y) * Math.min(1, dt * 10);
-        const want = Math.atan2(dx, dz);
-        const diff = THREE.MathUtils.euclideanModulo(want - this.mesh.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
-        this.mesh.rotation.y += diff * Math.min(1, dt * 12);
-      }
-      inner.position.y = Math.abs(Math.sin(time * 13 + this.phase)) * 0.035;
-      inner.rotation.z = Math.sin(time * 13 + this.phase) * 0.12;
-    } else if (this.seated) {
-      // Gentle sway with the ride.
-      inner.position.y = 0;
-      inner.rotation.z = Math.sin(time * 3 + this.phase) * 0.03;
-    } else {
-      inner.position.y = Math.max(0, Math.sin(time * 2.5 + this.phase)) * 0.012;
-      inner.rotation.z = Math.sin(time * 1.3 + this.phase) * 0.04;
-    }
-    if (this.grow) {
-      this.scale = Math.min(1, this.scale + dt * 3);
-      if (this.scale >= 1) this.grow = false;
-    }
-    this.mesh.scale.setScalar(this.scale);
-  }
-}
-
 // ---------- Stations ----------
 
 function makePlatform(color) {
@@ -306,6 +159,14 @@ function makePlatform(color) {
     post.position.set(PLATFORM_X + 0.42, PLATFORM_Y + 0.3, -1.0 + dz);
     g.add(post);
   }
+  // Ramps down to the ground at the back of the platform.
+  const rampMat = flat(0xcfc6b8);
+  for (const z of RAMP_Z) {
+    const ramp = new THREE.Mesh(new RoundedBoxGeometry(0.6, 0.05, 0.42, 2, 0.02), rampMat);
+    ramp.position.set(PLATFORM_X + 0.74, PLATFORM_Y / 2 - 0.01, z);
+    ramp.rotation.z = -Math.atan2(PLATFORM_Y, 0.5);
+    g.add(ramp);
+  }
   return shadowed(g);
 }
 
@@ -316,7 +177,6 @@ class Station {
     this.color = def.color;
     this.d = nearestDistance(track, def.at[0], def.at[1]);
     this.waiting = [];
-    this.spawnTimer = 1 + Math.random() * 2;
 
     const p = track.pointAt(this.d);
     const t = track.tangentAt(this.d);
@@ -339,6 +199,26 @@ class Station {
     const col = Math.floor(i / 2);
     const z = -2.9 + col * 0.62 + row * 0.3;
     return this.local(PLATFORM_X + 0.02 + row * 0.24, PLATFORM_Y, z);
+  }
+
+  // Top and bottom of the ramp nearest to a world point.
+  ramp(near) {
+    const local = this.group.worldToLocal(near.clone());
+    const z = RAMP_Z.reduce((a, b) => (Math.abs(b - local.z) < Math.abs(a - local.z) ? b : a));
+    const jitter = (Math.random() - 0.5) * 0.2;
+    return {
+      top: this.local(PLATFORM_X + 0.38, PLATFORM_Y, z + jitter),
+      bottom: this.local(PLATFORM_X + 1.15, 0, z + jitter),
+    };
+  }
+
+  // A random spot on the ground behind the station for a stroll.
+  wanderPoint(isFree) {
+    for (let i = 0; i < 30; i++) {
+      const p = this.local(PLATFORM_X + 1.6 + Math.random() * 4.5, 0, (Math.random() - 0.5) * 10);
+      if (isFree(p.x, p.z)) return p;
+    }
+    return this.local(PLATFORM_X + 1.4, 0, (Math.random() - 0.5) * 3);
   }
 
   contains(x, z, margin) {
@@ -379,7 +259,7 @@ const BOARD_INTERVAL = 0.22;
 const MIN_DWELL = 1.4;
 
 export class PassengerSystem {
-  constructor(scene, track, train, stations) {
+  constructor(scene, track, train, stations, obstacles = []) {
     this.scene = scene;
     this.track = track;
     this.train = train;
@@ -393,7 +273,76 @@ export class PassengerSystem {
     this.state = 'running';
     this.next = this.#nearestAhead();
     this.listeners = [];
-    for (const s of this.stations) for (let i = 0; i < 3; i++) this.#spawn(s);
+    this.trackPts = track.curve.getSpacedPoints(500);
+    this.obstacles = obstacles;
+    this.#populate();
+  }
+
+  get residents() {
+    return this.robots.size;
+  }
+
+  // Ground is walkable away from the rails, platforms, trees and houses.
+  #isFree = (x, z) => {
+    if (x * x + z * z > 21 * 21) return false;
+    if (this.trackPts.some((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < 1.3 ** 2)) return false;
+    if (this.stations.some((s) => s.contains(x, z, 0.3))) return false;
+    return !this.obstacles.some((o) => (o.x - x) ** 2 + (o.z - z) ** 2 < o.r * o.r);
+  };
+
+  // A fixed population: some wait on the platforms, the rest are out strolling.
+  #populate() {
+    let i = 0;
+    for (const s of this.stations) {
+      for (let k = 0; k < 7; k++) {
+        const r = new Robot(randomLook(i++));
+        this.robots.add(r);
+        this.scene.add(r.mesh);
+        if (k < 3) {
+          this.#chooseTrip(r, s);
+          r.mesh.position.copy(s.waitingSpot(s.waiting.length));
+          s.waiting.push(r);
+          this.#faceTrack(r, s);
+        } else {
+          r.mesh.position.copy(s.wanderPoint(this.#isFree));
+          r.mesh.rotation.y = Math.random() * Math.PI * 2;
+          this.#stroll(r, s, 1 + Math.floor(Math.random() * 3));
+        }
+      }
+      s.label.draw(s.waiting.length);
+    }
+  }
+
+  #chooseTrip(r, from) {
+    const others = this.stations.filter((x) => x !== from);
+    r.origin = from;
+    r.setDestination(others[Math.floor(Math.random() * others.length)]);
+  }
+
+  // Walk between a few spots near a station, pausing to look around.
+  #stroll(r, s, legs) {
+    r.state = 'strolling';
+    r.home = s;
+    r.setDestination(null);
+    r.speed = 0.55 + Math.random() * 0.25;
+    const step = (left) => {
+      if (left <= 0) return this.#headToPlatform(r, s);
+      r.walkTo([s.wanderPoint(this.#isFree)], () => r.wait(1.5 + Math.random() * 3.5, () => step(left - 1)));
+    };
+    step(legs);
+  }
+
+  #headToPlatform(r, s) {
+    if (s.waiting.length >= MAX_WAITING) return this.#stroll(r, s, 1);
+    r.state = 'returning';
+    r.speed = 0.9 + Math.random() * 0.2;
+    const ramp = s.ramp(r.mesh.position);
+    r.walkTo([ramp.bottom, ramp.top], () => {
+      this.#chooseTrip(r, s);
+      r.state = 'waiting';
+      s.waiting.push(r);
+      this.#regroup(s);
+    });
   }
 
   onChange(fn) {
@@ -438,23 +387,6 @@ export class PassengerSystem {
       }
     });
     return best;
-  }
-
-  #spawn(station) {
-    if (station.waiting.length >= MAX_WAITING) return;
-    const others = this.stations.filter((s) => s !== station);
-    const dest = others[Math.floor(Math.random() * others.length)];
-    const r = new Robot(dest, station, dest.color);
-    const spot = station.waitingSpot(station.waiting.length);
-    // Robots stroll in from the back of the platform.
-    r.mesh.position.copy(spot).addScaledVector(station.outward, 0.2);
-    r.scale = 0.2;
-    r.grow = true;
-    r.walkTo([spot], () => this.#faceTrack(r, station));
-    station.waiting.push(r);
-    this.robots.add(r);
-    this.scene.add(r.mesh);
-    station.label.draw(station.waiting.length);
   }
 
   #faceTrack(r, station) {
@@ -566,14 +498,6 @@ export class PassengerSystem {
       this.#arrive(s);
     }
 
-    for (const s of this.stations) {
-      s.spawnTimer -= dt;
-      if (s.spawnTimer <= 0) {
-        s.spawnTimer = 2.5 + Math.random() * 2.5;
-        if (!(this.state !== 'running' && this.current === s)) this.#spawn(s);
-      }
-    }
-
     if (this.state === 'dwell') this.#dwell(dt);
     else if (this.state === 'closing') {
       this.timer -= dt;
@@ -643,6 +567,7 @@ export class PassengerSystem {
       s.waiting.splice(s.waiting.indexOf(r), 1);
       this.#regroup(s);
       v.body.attach(r.mesh);
+      r.setIndoor(true);
       r.transit = 'in';
       this.transit.add(r);
       const f = v.floorY;
@@ -696,6 +621,7 @@ export class PassengerSystem {
         r.transit = null;
         this.transit.delete(r);
         this.scene.attach(r.mesh);
+        r.setIndoor(false);
         this.walkingOut--;
         this.#pay(r, s);
       },
@@ -710,13 +636,29 @@ export class PassengerSystem {
     text.sprite.position.copy(r.mesh.position).add(new THREE.Vector3(0, 0.6, 0));
     this.scene.add(text.sprite);
     this.floaters.push(text);
-    const exit = r.mesh.position.clone().addScaledVector(s.outward, 0.75);
-    r.walkTo([exit], () => this.#vanish(r));
+    r.setDestination(null);
+    const ramp = s.ramp(r.mesh.position);
+    r.walkTo([ramp.top, ramp.bottom], () => this.#stroll(r, s, 2 + Math.floor(Math.random() * 3)));
     this.#emit();
   }
 
   #vanish(r) {
     r.vanishing = true;
+  }
+
+  // A rider with no seat left steps off at the nearest station and strolls.
+  #release(r) {
+    const at = this.train.lead.group.position;
+    const s = this.current && this.state !== 'running'
+      ? this.current
+      : this.stations.reduce((a, b) => (b.group.position.distanceTo(at) < a.group.position.distanceTo(at) ? b : a));
+    r.vehicle = null;
+    r.seat = null;
+    r.stand();
+    r.setIndoor(false);
+    this.scene.add(r.mesh);
+    r.mesh.position.copy(s.ramp(s.group.position).bottom);
+    this.#stroll(r, s, 2);
   }
 
   // The train was rebuilt (new type or cars added/removed). Riders whose car
@@ -735,8 +677,8 @@ export class PassengerSystem {
         this.walkingOut--;
         this.delivered++;
         this.money += this.#fare(r);
-        r.mesh.removeFromParent();
-        this.robots.delete(r);
+        if (r.seat) r.seat.robot = null;
+        this.#release(r);
       }
       r.transit = null;
     }
@@ -745,8 +687,7 @@ export class PassengerSystem {
       const free = this.train.vehicles.flatMap((v) => (v.seats ?? []).filter((s) => !s.robot).map((s) => [v, s]));
       if (!free.length) {
         this.onboard.splice(this.onboard.indexOf(r), 1);
-        r.mesh.removeFromParent();
-        this.robots.delete(r);
+        this.#release(r);
         continue;
       }
       const [v, seat] = free[0];
@@ -754,6 +695,7 @@ export class PassengerSystem {
       r.vehicle = v;
       r.seat = seat;
       v.body.add(r.mesh);
+      r.setIndoor(true);
       r.sit(seat);
     }
     // Robots still walking to a door of a car that no longer exists go back.

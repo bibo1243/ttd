@@ -81,17 +81,41 @@ export class Locomotive extends Vehicle {
     b.add(dome);
 
     // Cab
-    const cab = box(0.68, 0.62, 0.6, red, 0.07);
-    cab.position.set(0, 0.76, -0.45);
-    b.add(cab);
+    // An open-sided cab so the driver can be seen at work.
+    const panel = (w, h, d, x, y, z, m = red) => {
+      const p = box(w, h, d, m, 0.02);
+      p.position.set(x, y, z);
+      b.add(p);
+    };
+    panel(0.68, 0.62, 0.05, 0, 0.76, -0.17); // front wall behind the boiler
+    panel(0.68, 0.3, 0.05, 0, 0.6, -0.73); // back wall
+    for (const side of [-1, 1]) {
+      panel(0.05, 0.3, 0.6, side * 0.315, 0.6, -0.45); // side panels
+      panel(0.05, 0.07, 0.6, side * 0.315, 1.035, -0.45); // header
+      for (const z of [-0.73, -0.17]) panel(0.05, 0.36, 0.05, side * 0.315, 0.88, z);
+      // Brass window rails
+      const rail = box(0.02, 0.02, 0.5, M.gold, 0.008);
+      rail.position.set(side * 0.33, 0.76, -0.45);
+      b.add(rail);
+    }
+    panel(0.6, 0.02, 0.52, 0, 0.47, -0.45, M.black); // floor
+    // Firebox door and gauges inside
+    const firebox = box(0.24, 0.18, 0.03, M.black, 0.02);
+    firebox.position.set(0, 0.6, -0.205);
+    const fire = new THREE.Mesh(new THREE.CircleGeometry(0.05, 16), new THREE.MeshStandardMaterial({ color: 0xffa040, emissive: 0xff6a1a, emissiveIntensity: 1.5 }));
+    fire.position.set(0, 0.6, -0.188);
+    fire.rotation.y = Math.PI;
+    b.add(firebox, fire);
+    for (const x of [-0.12, 0.12]) {
+      const gauge = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.015, 16), M.gold);
+      gauge.rotation.x = Math.PI / 2;
+      gauge.position.set(x, 0.86, -0.2);
+      b.add(gauge);
+    }
+    this.cabin = { pos: new THREE.Vector3(0.04, 0.48, -0.47), rotY: 0.6, scale: 1 };
     const cabRoof = box(0.8, 0.08, 0.74, M.black, 0.04);
     cabRoof.position.set(0, 1.1, -0.45);
     b.add(cabRoof);
-    for (const side of [-1, 1]) {
-      const win = box(0.02, 0.22, 0.3, M.window, 0.01);
-      win.position.set(side * 0.345, 0.88, -0.45);
-      b.add(win);
-    }
     const frontWin = box(0.18, 0.16, 0.02, M.window, 0.01);
     for (const side of [-1, 1]) {
       const w = frontWin.clone();

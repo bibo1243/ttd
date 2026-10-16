@@ -119,7 +119,8 @@ export function buildWorld(scene, track, stations = []) {
 
   const isStation = (x, z) => stations.some((s) => s.contains(x, z, 1.2));
 
-  const placeAt = (radiusMax, clearance, make, tries) => {
+  const obstacles = [];
+  const placeAt = (radiusMax, clearance, make, tries, footprint) => {
     for (let i = 0; i < tries; i++) {
       const a = rand() * Math.PI * 2;
       const r = Math.sqrt(rand()) * radiusMax;
@@ -129,10 +130,11 @@ export function buildWorld(scene, track, stations = []) {
       const o = make(rand);
       o.position.set(x, 0, z);
       scene.add(o);
+      obstacles.push({ x, z, r: footprint });
     }
   };
-  placeAt(16, 2.4, makeHouse, 14);
-  placeAt(23, 1.3, makeTree, 140);
+  placeAt(16, 2.4, makeHouse, 14, 1.0);
+  placeAt(23, 1.3, makeTree, 140, 0.45);
 
   // Rocks
   for (let i = 0; i < 30; i++) {
@@ -158,5 +160,5 @@ export function buildWorld(scene, track, stations = []) {
     scene.add(c);
     clouds.push(c);
   }
-  return { clouds };
+  return { clouds, obstacles };
 }

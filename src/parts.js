@@ -186,7 +186,7 @@ export const sectionX = (s, y, power) => {
 
 // Like loft(), but rings share an angle list that lands exactly on every
 // cut height, so rectangular openings can be removed cleanly.
-function shellGeometry(stations, ref, cuts, { segments, power }) {
+function shellGeometry(stations, ref, cuts, { segments, power, openFront = false }) {
   const cy = (ref.top + ref.bottom) / 2;
   const hh = (ref.top - ref.bottom) / 2;
   const angles = [];
@@ -244,7 +244,7 @@ function shellGeometry(stations, ref, cuts, { segments, power }) {
     }
   };
   cap(0, false);
-  if (stations[stations.length - 1].hw > 0.005) cap(stations.length - 1, true);
+  if (!openFront && stations[stations.length - 1].hw > 0.005) cap(stations.length - 1, true);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setIndex(indices);
@@ -286,7 +286,7 @@ export function buildCabin(v, o) {
   for (const c of cuts) zs.add(c.z0).add(c.z1);
   const stations = [...zs].sort((a, b) => a - b).map((z) => ({ z, ...ref }));
   if (o.nose) stations.push(...o.nose);
-  const geo = shellGeometry(stations, ref, cuts, { segments, power });
+  const geo = shellGeometry(stations, ref, cuts, { segments, power, openFront: o.openFront });
 
   const outer = shadowed(new THREE.Mesh(geo, o.paint));
   const liner = new THREE.Mesh(geo, linerMat);

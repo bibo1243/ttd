@@ -9,11 +9,17 @@
   <body>
     <div id="app"></div>
     <div id="hud">
-      <div class="title">迷你交通大亨 <span>原型 0.3</span></div>
+      <div class="title-row">
+        <div class="title">迷你交通大亨 <span>原型 0.4</span></div>
+        <span class="mini-money" id="miniMoney">$0</span>
+        <button id="collapse" class="icon" title="收合面板 (H)" aria-label="收合面板" aria-expanded="true">▾</button>
+      </div>
+      <div class="panel-body">
       <div class="stats">
         <div class="money" id="money">$0</div>
         <div class="stat"><span>車上乘客</span><b id="riders">0 / 0</b></div>
         <div class="stat"><span>已載送</span><b id="delivered">0</b></div>
+        <div class="stat"><span>居民</span><b id="residents">0</b></div>
       </div>
       <div class="status" id="status"></div>
       <div id="types" class="row seg"></div>
@@ -31,7 +37,8 @@
         <button id="removeCar">－ 車廂</button>
         <span id="carCount" class="muted"></span>
       </div>
-      <div class="hint">拖曳旋轉・滾輪縮放・右鍵平移</div>
+      <div class="hint">拖曳旋轉・滾輪縮放・右鍵平移・H 收合面板</div>
+      </div>
     </div>
     <script type="module" src="./src/main.js"></script>
   </body>

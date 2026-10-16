@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Carriage, Locomotive } from './steam.js';
 import { BulletCar, TramCar } from './modern.js';
+import { makeDriver } from './robots.js';
 
 export const TRAIN_TYPES = {
   steam: {
@@ -62,6 +63,15 @@ export class Train {
     if (!this.head || this.head.type !== this.type) {
       this.head = c.head();
       this.head.type = this.type;
+      if (this.head.cabin) {
+        const { pos, rotY, scale } = this.head.cabin;
+        this.driver = makeDriver();
+        this.driver.mesh.position.copy(pos);
+        this.driver.mesh.rotation.y = rotY;
+        this.driver.scale = scale;
+        this.driver.mesh.traverse((m) => (m.castShadow = false));
+        this.head.body.add(this.driver.mesh);
+      }
       this.tail = c.tail ? c.tail() : null;
     }
     for (const v of this.vehicles) this.scene.remove(v.group);
@@ -106,6 +116,7 @@ export class Train {
       v.place(this.track, d, this.travelled, time);
       prevHalf = v.length / 2;
     }
+    this.driver?.update(dt, time);
     const top = this.head.chimneyTop?.getWorldPosition(new THREE.Vector3());
     this.smoke.update(dt, top, this.config.smoke ? this.speed : 0);
   }

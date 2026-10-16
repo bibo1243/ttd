@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { M, Vehicle, axle, box, buildCabin, loft, mat, rod, shadowed } from './parts.js';
+import { M, Vehicle, axle, box, buildCabin, glassMat, loft, mat, rod, shadowed } from './parts.js';
 
 const glass = mat(0x22303d, { roughness: 0.08, metalness: 0.4, envMapIntensity: 1.6 });
 const headLamp = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff2c4, emissiveIntensity: 1.4 });
@@ -150,11 +150,21 @@ export class BulletCar extends Vehicle {
       const p1 = hsrNose(t1);
       const z0 = straightEnd + t0 * HSR_NOSE;
       const slope = Math.atan2(p0.top - p1.top, (t1 - t0) * HSR_NOSE);
-      const shield = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), glass);
-      shield.scale.set(p0.hw * 0.7, 0.045, 0.22);
-      shield.position.set(0, p0.top - 0.025, z0);
+      // Clear bubble canopy with the driver's head peeking up inside it.
+      const canopyMat = new THREE.MeshPhysicalMaterial({
+        color: 0x9fc7e8, roughness: 0.05, transparent: true, opacity: 0.35, depthWrite: false, clearcoat: 1,
+      });
+      const shield = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), canopyMat);
+      shield.scale.set(p0.hw * 0.62, 0.1, 0.22);
+      shield.position.set(0, p0.top - 0.03, z0);
       shield.rotation.x = slope;
-      b.add(shield);
+      shield.renderOrder = 3;
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(1, 0.06, 8, 32), mat(0x1f5fbf, { roughness: 0.35 }));
+      rim.scale.set(p0.hw * 0.62, 0.22, 0.25);
+      rim.rotation.x = Math.PI / 2 + slope;
+      rim.position.copy(shield.position);
+      b.add(shield, rim);
+      if (kind === 'head') this.cabin = { pos: new THREE.Vector3(0, p0.top - 0.25, z0 - 0.01), rotY: 0, scale: 0.72 };
 
       // Lamps low on the nose
       const tl = 0.62;
@@ -242,6 +252,7 @@ export class TramCar extends Vehicle {
       z0: -half,
       z1: half - front,
       nose: stations.slice(2),
+      openFront: cab,
       power: 6,
       paint: paintMat(cream),
       windows: [{ z: -0.36, w: 0.24 }, { z: 0.27, w: 0.24 }],
@@ -275,13 +286,21 @@ export class TramCar extends Vehicle {
     if (cab) {
       const fz = half + 0.001;
       const fhw = TRAM.hw * 0.78;
-      const shield = new THREE.Mesh(new RoundedBoxGeometry(fhw * 1.7, 0.3, 0.02, 2, 0.05), glass);
-      shield.position.set(0, 0.73, fz);
-      const signBox = new THREE.Mesh(new RoundedBoxGeometry(fhw * 1.2, 0.07, 0.02, 2, 0.02), sign);
-      signBox.position.set(0, 0.9, fz - 0.004);
+      // Open cab front: painted lower panel, header with route sign, big windscreen.
+      const lower = box(fhw * 2.04, 0.34, 0.03, paintMat(cream), 0.02);
+      lower.position.set(0, 0.45, fz - 0.016);
+      const header = box(fhw * 2.04, 0.08, 0.03, paintMat(cream), 0.02);
+      header.position.set(0, 0.885, fz - 0.016);
+      const shield = new THREE.Mesh(new THREE.PlaneGeometry(fhw * 1.98, 0.27), glassMat);
+      shield.position.set(0, 0.75, fz - 0.02);
+      const signBox = new THREE.Mesh(new RoundedBoxGeometry(fhw * 1.2, 0.05, 0.012, 2, 0.015), sign);
+      signBox.position.set(0, 0.885, fz + 0.002);
       const bumper = box(fhw * 1.9, 0.08, 0.04, green, 0.02);
       bumper.position.set(0, 0.32, fz - 0.01);
-      b.add(shield, signBox, bumper);
+      const dash = box(fhw * 1.6, 0.06, 0.08, M.black, 0.015);
+      dash.position.set(0, 0.6, fz - 0.07);
+      b.add(lower, header, shield, signBox, bumper, dash);
+      if (kind === 'head') this.cabin = { pos: new THREE.Vector3(0, 0.31, half - 0.17), rotY: 0, scale: 1 };
       for (const side of [-1, 1]) {
         const l = new THREE.Mesh(new THREE.SphereGeometry(0.028, 14, 10), kind === 'head' ? headLamp : tailLamp);
         l.position.set(side * fhw * 0.7, 0.44, fz);
