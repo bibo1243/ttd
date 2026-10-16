@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { arcCurve, joinCurve, minRadius, straightCurve } from './network.js';
-import { FloatText, PLATFORM_X, STATION_NAMES, Station, makePlatform, placePlatform } from './stations.js';
+import { FloatText, STATION_NAMES, STATION_STYLES, Station, makePlatform, placePlatform } from './stations.js';
 import { Train, TRAIN_TYPES } from './train.js';
 
 // Prices. Building on occupied ground also pays to clear what stands there.
@@ -118,16 +118,21 @@ export class BuildController {
     this.scene.add(this.cursor, this.startMark);
 
     this.stationGhostMat = new THREE.MeshStandardMaterial({ color: GOOD, transparent: true, opacity: 0.55, depthWrite: false, emissive: 0x1d5a35 });
-    this.stationGhost = makePlatform(0xffffff);
-    this.stationGhost.traverse((o) => {
-      if (o.isMesh) {
-        o.material = this.stationGhostMat;
-        o.castShadow = false;
-        o.receiveShadow = false;
-      }
-    });
-    this.stationGhost.visible = false;
-    this.scene.add(this.stationGhost);
+    this.stationGhosts = {};
+    for (const key of Object.keys(STATION_STYLES)) {
+      const g = makePlatform(0xffffff, key);
+      g.traverse((o) => {
+        if (o.isMesh) {
+          o.material = this.stationGhostMat;
+          o.castShadow = false;
+          o.receiveShadow = false;
+        }
+      });
+      g.visible = false;
+      this.stationGhosts[key] = g;
+      this.scene.add(g);
+    }
+    this.stationStyle = 'town';
   }
 
   #clear(group) {
@@ -150,7 +155,7 @@ export class BuildController {
     this.#clear(this.hotTrack);
     this.cursor.visible = false;
     this.startMark.visible = false;
-    this.stationGhost.visible = false;
+    for (const g of Object.values(this.stationGhosts)) g.visible = false;
     this.#unhighlight();
   }
 
@@ -227,7 +232,7 @@ export class BuildController {
         this.#refreshTools();
         return this.#card('蓋車站', '車站要蓋在鐵路旁，先用「鐵路」鋪一段軌道吧。', [{ label: '知道了', run: () => this.#card(null) }]);
       }
-      this.#card('蓋車站', '移到鐵路旁，游標在哪一側就蓋在哪一側。車站需要一段 8 公尺以上的平直鐵路。');
+      this.#stationCard();
     } else if (tool === 'line') {
       if (!this.editing) this.editing = this.lines[this.lines.length - 1] ?? null;
       this.#lineCard();
@@ -313,7 +318,10 @@ export class BuildController {
 
   #onPlatformZone(s, p) {
     const local = s.group.worldToLocal(p.clone());
-    return local.x > 0.4 && local.x < PLATFORM_X + 0.85 && Math.abs(local.z) < 4.2;
+    const st = s.style;
+    if (local.x > 0.4 && local.x < st.depth + 0.25 && Math.abs(local.z) < st.len / 2 + 0.2) return true;
+    // A train shed's columns stand on the far side of the rails.
+    return !!st.shed && local.x > -0.95 && local.x < -0.15 && Math.abs(local.z) < st.len / 2;
   }
 
   #previewTrack() {
@@ -409,32 +417,39 @@ export class BuildController {
 
   // ---------- Station tool ----------
 
-  #planStation(p) {
+  #planStation(p, styleKey = this.stationStyle) {
+    const st = STATION_STYLES[styleKey];
     const ne = this.network.nearestEdge(p.x, p.z);
     if (!ne || ne.dist > 3.5) return null;
     const { edge, t, pos } = ne;
     const dir = edge.tangentAt(t);
     const side = (p.x - pos.x) * dir.z - (p.z - pos.z) * dir.x >= 0 ? 1 : -1;
-    const g = this.stationGhost;
+    const g = this.stationGhosts[styleKey];
     placePlatform(g, pos, dir, side);
     g.updateMatrixWorld(true);
     const problems = [];
+    const need = st.len + 0.4;
     if (edge.reservedBy) problems.push('列車正在使用這段軌道');
-    const run = this.network.straightRun(edge, t, 4.2);
-    if (!run) problems.push('需要一段 8 公尺以上、沒有分岔的鐵路');
+    const run = this.network.straightRun(edge, t, need / 2);
+    if (!run) problems.push(`需要一段 ${Math.ceil(need)} 公尺以上、沒有分岔的鐵路`);
     else {
       const bend = Math.max(...run.map((q) => Math.abs((q.x - pos.x) * dir.z - (q.z - pos.z) * dir.x)));
       if (bend > 0.12) problems.push('這段鐵路不夠直');
     }
-    if (this.stations.some((s) => s.node.pos.distanceTo(pos) < 8.6)) problems.push('離其他車站太近');
+    if (this.stations.some((s) => s.node.pos.distanceTo(pos) < (s.len + st.len) / 2 + 1)) problems.push('離其他車站太近');
     const local = (q) => g.worldToLocal(q.clone());
     const inZone = (q) => {
       const l = local(q);
-      return l.x > 0.4 && l.x < PLATFORM_X + 1 && Math.abs(l.z) < 4.2;
+      if (l.x > 0.4 && l.x < st.depth + 0.3 && Math.abs(l.z) < st.len / 2 + 0.2) return true;
+      return st.shed && l.x > -0.95 && l.x < -0.15 && Math.abs(l.z) < st.len / 2;
     };
     if ([...this.network.edges].some((e) => e.samples.some(inZone))) problems.push('會壓到鐵路');
-    for (const z of [-4, 4]) {
-      const c = g.localToWorld(V(PLATFORM_X + 1.6, z));
+    if (this.stations.some((s) => [[0.5, 0], [st.depth, -st.len / 2], [st.depth, st.len / 2], [st.depth, 0], [0.5, -st.len / 2], [0.5, st.len / 2]].some(([x, z]) => {
+      const c = g.localToWorld(V(x, z));
+      return s.contains(c.x, c.z, 0.2);
+    }))) problems.push('會壓到其他車站');
+    for (const [x, z] of [[st.depth + 0.4, -st.len / 2], [st.depth + 0.4, st.len / 2], [-0.6, -st.len / 2], [-0.6, st.len / 2]]) {
+      const c = g.localToWorld(V(x, z));
       if (c.x * c.x + c.z * c.z > (ISLAND_R + 0.5) ** 2) {
         problems.push('超出島的範圍');
         break;
@@ -444,25 +459,43 @@ export class BuildController {
     const props = this.scenery.query((x, z, r) => {
       const l = local(V(x, z));
       const m = r * 0.6 + 0.4;
-      return l.x > -0.6 - m && l.x < PLATFORM_X + 1.1 + m && Math.abs(l.z) < 4.2 + m;
+      return l.x > -0.6 - m && l.x < st.depth + 0.2 + m && Math.abs(l.z) < st.len / 2 + 0.2 + m;
     });
-    const cost = COST.station + props.reduce((s, q) => s + COST[q.kind], 0);
+    const cost = st.cost + props.reduce((s, q) => s + COST[q.kind], 0);
     if (!problems.length && cost > this.passengers.money) problems.push('資金不足');
-    return { edge, t, pos, dir, side, props, cost, problems, ok: !problems.length };
+    return { edge, t, pos, dir, side, style: styleKey, props, cost, problems, ok: !problems.length };
+  }
+
+  #styleActions() {
+    return [
+      ...Object.values(STATION_STYLES).map((st) => ({
+        label: `${st.label} ${money(st.cost)}`,
+        on: st.key === this.stationStyle,
+        run: () => {
+          this.stationStyle = st.key;
+          for (const g of Object.values(this.stationGhosts)) g.visible = false;
+          if (this.pointer) this.#previewStation();
+          else this.#stationCard();
+        },
+      })),
+      { label: '完成', primary: true, run: () => this.setTool(null) },
+    ];
+  }
+
+  #stationCard(extra = '') {
+    const st = STATION_STYLES[this.stationStyle];
+    this.#card('蓋車站', `<b>${st.label}</b>：${st.desc}，月台 ${st.len} 公尺。<br>${extra || '移到鐵路旁，游標在哪一側就蓋在哪一側。'}`, this.#styleActions());
   }
 
   #previewStation() {
+    for (const g of Object.values(this.stationGhosts)) g.visible = false;
     this.plan = this.#planStation(this.pointer);
-    if (!this.plan) {
-      this.stationGhost.visible = false;
-      return this.#card('蓋車站', '移到鐵路旁，游標在哪一側就蓋在哪一側。車站需要一段 8 公尺以上的平直鐵路。', [{ label: '完成', run: () => this.setTool(null) }]);
-    }
-    this.stationGhost.visible = true;
+    if (!this.plan) return this.#stationCard();
+    this.stationGhosts[this.plan.style].visible = true;
     this.stationGhostMat.color.copy(this.plan.ok ? GOOD : BAD);
     this.stationGhostMat.emissive.set(this.plan.ok ? 0x1d5a35 : 0x6a1d1a);
-    const info = `${this.#nextName().name}・費用 <b>${money(this.plan.cost)}</b>${this.#clearText(this.plan.props)}` +
-      (this.plan.ok ? '<br>點一下蓋在這裡。' : `<br><span class="bad">${this.plan.problems.join('、')}</span>`);
-    this.#card('蓋車站', info, [{ label: '完成', run: () => this.setTool(null) }]);
+    this.#stationCard(`${this.#nextName().name}・費用 <b>${money(this.plan.cost)}</b>${this.#clearText(this.plan.props)}` +
+      (this.plan.ok ? '・點一下蓋在這裡' : `<br><span class="bad">${this.plan.problems.join('、')}</span>`));
   }
 
   #nextName() {
@@ -480,9 +513,9 @@ export class BuildController {
     if (pay) this.passengers.spend(plan.cost);
     this.scenery.remove(plan.props);
     const node = this.network.splitEdge(plan.edge, plan.t);
-    const s = new Station(def, node, plan.dir, plan.side);
+    const s = new Station(def, node, plan.dir, plan.side, plan.style);
     this.passengers.addStation(s);
-    if (pay) this.#float(`-${money(plan.cost)}`, s.local(PLATFORM_X, 1.2, 0));
+    if (pay) this.#float(`-${money(plan.cost)}`, s.local(s.px, 1.2, 0));
     // Until the player plans lines, every new station joins the first one.
     if (!this.loading) {
       if (!this.lines.length) this.#newLine(true);
@@ -631,7 +664,7 @@ export class BuildController {
   }
 
   #removeStation(s) {
-    const at = s.local(PLATFORM_X, 1.2, 0);
+    const at = s.local(s.px, 1.2, 0);
     for (const l of this.lines) l.stations = l.stations.filter((x) => x !== s);
     this.passengers.setLines(this.lines);
     if (!this.passengers.removeStation(s)) return false;
@@ -739,9 +772,9 @@ export class BuildController {
         steps.push(plan.cost);
       }
     };
-    const station = (x, z, sx, sz) => {
-      const plan = this.#planStation(V(sx, sz));
-      if (!plan?.ok) throw new Error(`demo station ${x},${z}: ${plan?.problems}`);
+    const station = (style, sx, sz) => {
+      const plan = this.#planStation(V(sx, sz), style);
+      if (!plan?.ok) throw new Error(`demo station ${style} ${sx},${sz}: ${plan?.problems}`);
       steps.push(plan.cost);
       return this.#buildStation(plan, this.#nextName(), true);
     };
@@ -752,15 +785,15 @@ export class BuildController {
     try {
       this.loading = true; // no automatic line while laying out
       this.setTool(null);
-      run([[10, -6], [10, 6], [6, 10], [-6, 10], [-10, 6], [-10, -6], [-6, -10], [6, -10]], [10, -6]);
+      run([[14, -8], [14, 8], [10, 12], [-10, 12], [-14, 8], [-14, -8], [-10, -12], [10, -12]], [14, -8]);
       // A branch line off the west side to a terminus inside the loop.
-      const p1 = this.#planSegment(this.#snap(V(-10, 3)), { pos: V(-6, -1) });
+      const p1 = this.#planSegment(this.#snap(V(-14, 3)), { pos: V(-10, -1) });
       if (!p1.ok) throw new Error(`demo branch: ${p1.problems}`);
-      run2.call(this, this.#commitSegment(p1, true), [4, -1]);
-      const a = station(10, 0, 11.2, 0);
-      const b = station(0, 10, 0, 11.2);
-      const c = station(0, -10, 0, -11.2);
-      const d = station(-0.5, -1, -0.5, -2.2);
+      run2.call(this, this.#commitSegment(p1, true), [6, -1]);
+      const a = station('town', 15.2, 0);
+      const b = station('grand', 0, 13.2);
+      const c = station('town', 0, -13.2);
+      const d = station('halt', -2, -2.2);
       this.loading = false;
       this.lines = [];
       const l1 = this.#newLine();
@@ -800,7 +833,7 @@ export class BuildController {
     const sIndex = new Map(this.stations.map((s, i) => [s, i]));
     const data = {
       network: { nodes: net.nodes, edges: net.edges },
-      stations: this.stations.map((s) => ({ node: net.index.get(s.node), dir: [s.dir.x, s.dir.z], side: s.side, name: s.name })),
+      stations: this.stations.map((s) => ({ node: net.index.get(s.node), dir: [s.dir.x, s.dir.z], side: s.side, name: s.name, style: s.style.key })),
       lines: this.lines.map((l) => ({ name: l.name, color: l.color, auto: l.auto, stations: l.stations.map((s) => sIndex.get(s)) })),
       trains: this.trains.map((t) => ({ line: this.lines.indexOf(t.line), type: t.type, mids: t.mids.length })),
       money: this.passengers.money,
@@ -826,7 +859,7 @@ export class BuildController {
       }
       const stations = (data.stations ?? []).map((st) => {
         const def = STATION_NAMES.find((n) => n.name === st.name) ?? this.#nextName();
-        const s = new Station(def, nodes[st.node], V(st.dir[0], st.dir[1]), st.side);
+        const s = new Station(def, nodes[st.node], V(st.dir[0], st.dir[1]), st.side, st.style ?? 'halt');
         this.scenery.remove(this.scenery.query((x, z, r) => s.contains(x, z, r * 0.6 + 0.4)));
         this.passengers.addStation(s);
         return s;

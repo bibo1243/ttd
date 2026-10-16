@@ -406,6 +406,60 @@ export class Robot {
     return !!this.hop;
   }
 
+  get sulking() {
+    return !!this.fit;
+  }
+
+  // Missed the train! Throw itself down and roll around kicking, then get up
+  // stamping its feet and carry on where it was going.
+  tantrum(seconds = 2.6) {
+    if (this.hop || this.seated) return false;
+    this.fit = { t: 0, dur: seconds, roll: Math.random() < 0.5 ? 1 : -1 };
+    return true;
+  }
+
+  #throwFit(dt, time, inner) {
+    const f = this.fit;
+    f.t += dt;
+    const t = f.t;
+    const legs = this.mesh.userData.legs;
+    const down = 0.28; // falling over
+    const up = 0.35; // getting back up
+    const stomp = 0.7; // stamping after
+    const lieEnd = f.dur - up - stomp;
+    let tip;
+    if (t < down) tip = t / down;
+    else if (t < lieEnd) tip = 1;
+    else if (t < lieEnd + up) tip = 1 - (t - lieEnd) / up;
+    else tip = 0;
+    const e = tip * tip * (3 - 2 * tip);
+    inner.rotation.x = -e * 1.45; // on its back
+    inner.position.y = e * 0.07;
+    inner.scale.y = 1;
+    if (t >= down && t < lieEnd) {
+      // Roll from side to side, legs kicking.
+      inner.rotation.y = Math.sin(t * 11) * 0.75 * f.roll;
+      inner.rotation.z = 0;
+      for (const [i, leg] of legs.entries()) leg.rotation.x = Math.sin(t * 22 + i * Math.PI) * 0.9;
+    } else {
+      inner.rotation.y *= Math.max(0, 1 - dt * 12);
+      for (const leg of legs) leg.rotation.x *= Math.max(0, 1 - dt * 12);
+    }
+    if (t >= lieEnd + up) {
+      // Stamp, stamp, stamp.
+      const k = (t - lieEnd - up) / stomp;
+      inner.position.y = Math.abs(Math.sin(k * Math.PI * 3)) * 0.05;
+      inner.rotation.z = Math.sin(k * Math.PI * 3) * 0.18;
+      this.mesh.rotation.y += Math.sin(time * 9) * dt * 1.5;
+    }
+    if (t >= f.dur) {
+      this.fit = null;
+      inner.rotation.set(0, 0, 0);
+      inner.position.y = 0;
+      for (const leg of legs) leg.rotation.x = 0;
+    }
+  }
+
   // The antenna tip lights up in the colour of the station it's heading to.
   setDestination(station) {
     this.dest = station;
@@ -499,7 +553,9 @@ export class Robot {
   update(dt, time) {
     const inner = this.mesh.userData.inner;
     for (const b of this.bobbers) b.rotation.z = Math.sin(time * 1.7 + this.phase) * 0.06;
-    if (this.path.length && this.path[0].jump) {
+    if (this.fit) {
+      this.#throwFit(dt, time, inner);
+    } else if (this.path.length && this.path[0].jump) {
       this.#hopTo(this.path[0], dt, inner);
     } else if (this.path.length) {
       const target = this.path[0];

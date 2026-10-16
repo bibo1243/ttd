@@ -2,27 +2,15 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { Robot, randomLook } from './robots.js';
 import { between, randomPersonality, residentName } from './residents.js';
+import { PLATFORM_Y, STATION_STYLES, STEP_H, STEP_W, disposeStationModel, highlightStation, makeStationModel } from './stationStyles.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
-export const PLATFORM_Y = 0.3;
-export const PLATFORM_LEN = 8;
-export const PLATFORM_X = 0.95; // platform centre, measured outward from the rails
-const RAMP_Z = [-2.25, 2.25];
-const STEP_W = 0.26;
-const STEP_H = PLATFORM_Y / 2;
-const STEP_X = PLATFORM_X + 0.5 + STEP_W / 2;
+export { PLATFORM_Y, STATION_STYLES };
+// Defaults for code that doesn't know a station's style.
+export const PLATFORM_LEN = STATION_STYLES.halt.len;
+export const PLATFORM_X = STATION_STYLES.halt.px;
 
 const flat = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
-
-function shadowed(o) {
-  o.traverse((c) => {
-    if (c.isMesh) {
-      c.castShadow = true;
-      c.receiveShadow = true;
-    }
-  });
-  return o;
-}
 
 // Names and roof colours handed out to stations as the player builds them.
 export const STATION_NAMES = [
@@ -107,6 +95,8 @@ export class FloatText {
     canvas.height = 96;
     const c = canvas.getContext('2d');
     c.font = `800 60px ${FONT}`;
+    const w = c.measureText(text).width;
+    if (w > 236) c.font = `800 ${Math.floor(60 * 236 / w)}px ${FONT}`;
     c.textAlign = 'center';
     c.textBaseline = 'middle';
     c.lineWidth = 10;
@@ -137,90 +127,67 @@ export class FloatText {
 
 // ---------- Stations ----------
 
-export function makePlatform(color) {
-  const g = new THREE.Group();
-  const L = PLATFORM_LEN;
-  const platform = new THREE.Mesh(new RoundedBoxGeometry(1.0, PLATFORM_Y, L, 2, 0.05), flat(0xd9d2c5));
-  platform.position.set(PLATFORM_X, PLATFORM_Y / 2, 0);
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.012, L - 0.1), flat(0xf2c14e));
-  edge.position.set(PLATFORM_X - 0.42, PLATFORM_Y + 0.006, 0);
-  g.add(platform, edge);
-  const pillarGeo = new THREE.CylinderGeometry(0.035, 0.035, 0.82, 10);
-  const white = flat(0xf4efe6);
-  for (const z of [-3, -1.5, 0, 1.5, 3]) {
-    const p = new THREE.Mesh(pillarGeo, white);
-    p.position.set(PLATFORM_X + 0.3, PLATFORM_Y + 0.41, z);
-    g.add(p);
-  }
-  const roof = new THREE.Mesh(new RoundedBoxGeometry(1.1, 0.08, 7, 2, 0.04), flat(color));
-  roof.position.set(PLATFORM_X + 0.12, PLATFORM_Y + 0.86, 0);
-  roof.rotation.z = 0.12;
-  g.add(roof);
-  const bench = new THREE.Mesh(new RoundedBoxGeometry(0.18, 0.1, 0.7, 2, 0.03), flat(0x8b5a3c));
-  bench.position.set(PLATFORM_X + 0.36, PLATFORM_Y + 0.08, 1.0);
-  g.add(bench);
-  // Station sign on two posts
-  const signMat = flat(color);
-  const sign = new THREE.Mesh(new RoundedBoxGeometry(0.06, 0.16, 0.6, 2, 0.03), signMat);
-  sign.position.set(PLATFORM_X + 0.42, PLATFORM_Y + 0.62, -1.0);
-  g.add(sign);
-  for (const dz of [-0.24, 0.24]) {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.6, 8), white);
-    post.position.set(PLATFORM_X + 0.42, PLATFORM_Y + 0.3, -1.0 + dz);
-    g.add(post);
-  }
-  // A low step at the back: robots hop up onto it, then onto the platform.
-  const stepMat = flat(0xcfc6b8);
-  for (const z of RAMP_Z) {
-    const step = new THREE.Mesh(new RoundedBoxGeometry(STEP_W, STEP_H, 0.5, 2, 0.02), stepMat);
-    step.position.set(STEP_X, STEP_H / 2, z);
-    g.add(step);
-  }
-  return shadowed(g);
+// A station model of the given style (used for build previews too).
+export function makePlatform(color, style = 'halt', name = '') {
+  return makeStationModel(STATION_STYLES[style] ?? STATION_STYLES.halt, color, name).group;
 }
 
 export class Station {
   // Stands beside the track at `node`. dir: the track direction there;
   // side: +1 or -1, which side of the rails (looking along dir) the platform is on.
-  constructor(def, node, dir, side = 1) {
+  constructor(def, node, dir, side = 1, style = 'halt') {
     this.name = def.name;
     this.color = def.color;
     this.def = def;
     this.node = node;
     this.dir = dir.clone().setY(0).normalize();
     this.side = side;
+    this.style = STATION_STYLES[style] ?? STATION_STYLES.halt;
+    const st = this.style;
+    this.len = st.len;
+    this.px = st.px;
+    this.maxWaiting = st.waiting;
     this.waiting = [];
     node.station = this;
 
-    this.group = makePlatform(def.color);
+    const model = makeStationModel(st, def.color, def.name);
+    this.group = model.group;
+    this.extraBlocks = model.blocks;
     placePlatform(this.group, node.pos, this.dir, side);
     this.group.updateMatrixWorld(true);
     this.outward = new THREE.Vector3(1, 0, 0).applyQuaternion(this.group.quaternion);
     this.label = new StationLabel(def.name, def.color);
-    this.label.sprite.position.copy(this.local(PLATFORM_X, 2.1, 0));
+    const top = st.key === 'grand' ? 4.4 : st.key === 'town' ? 2.3 : 2.0;
+    this.label.sprite.position.copy(this.local(st.px, top, 0));
   }
 
   local(x, y, z) {
     return this.group.localToWorld(new THREE.Vector3(x, y, z));
   }
 
-  // A free spot on the platform for a waiting robot.
+  // A free spot on the platform for a waiting robot: in loose rows along
+  // the platform, clear of the edge and of the benches at the back.
   waitingSpot(i) {
-    const row = i % 2;
-    const col = Math.floor(i / 2);
-    const z = -2.9 + col * 0.62 + row * 0.3;
-    return this.local(PLATFORM_X + 0.02 + row * 0.24, PLATFORM_Y, z);
+    const st = this.style;
+    const rows = st.width > 1.2 ? 3 : 2;
+    const row = i % rows;
+    const col = Math.floor(i / rows);
+    const cols = Math.ceil(st.waiting / rows);
+    const span = st.len - 2.2;
+    const z = -span / 2 + (cols > 1 ? (col * span) / (cols - 1) : span / 2) + row * 0.18;
+    return this.local(st.px - st.width / 2 + 0.42 + row * 0.2, PLATFORM_Y, z);
   }
 
   // Ground, step and platform-top spots of the steps nearest to a point.
   ramp(near) {
+    const st = this.style;
     const local = this.group.worldToLocal(near.clone());
-    const z = RAMP_Z.reduce((a, b) => (Math.abs(b - local.z) < Math.abs(a - local.z) ? b : a));
+    const z = st.ramps.reduce((a, b) => (Math.abs(b - local.z) < Math.abs(a - local.z) ? b : a));
     const jitter = (Math.random() - 0.5) * 0.24;
     return {
-      top: this.local(PLATFORM_X + 0.3, PLATFORM_Y, z + jitter),
-      step: this.local(STEP_X, STEP_H, z + jitter),
-      bottom: this.local(STEP_X + 0.42, 0, z + jitter),
+      top: this.local(st.back - 0.22, PLATFORM_Y, z + jitter),
+      step: this.local(st.stepX, STEP_H, z + jitter),
+      bottom: this.local(st.stepX + 0.42, 0, z + jitter),
     };
   }
 
@@ -236,44 +203,49 @@ export class Station {
   }
 
   // Solid blocks (in the station's frame) walkers must go around:
-  // the platform body and the steps.
+  // the platform body, the steps and any station building.
   get blocks() {
+    const st = this.style;
     return [
-      { x0: PLATFORM_X - 0.5, x1: PLATFORM_X + 0.5, z0: -PLATFORM_LEN / 2, z1: PLATFORM_LEN / 2, top: PLATFORM_Y },
-      ...RAMP_Z.map((z) => ({ x0: STEP_X - STEP_W / 2, x1: STEP_X + STEP_W / 2, z0: z - 0.25, z1: z + 0.25, top: STEP_H })),
+      { x0: st.px - st.width / 2, x1: st.back, z0: -st.len / 2, z1: st.len / 2, top: PLATFORM_Y },
+      ...st.ramps.map((z) => ({ x0: st.stepX - STEP_W / 2, x1: st.stepX + STEP_W / 2, z0: z - 0.275, z1: z + 0.275, top: STEP_H })),
+      ...this.extraBlocks,
     ];
   }
 
   // A random spot on the ground behind the station for a stroll.
   wanderPoint(isFree) {
+    const st = this.style;
     for (let i = 0; i < 30; i++) {
-      const p = this.local(PLATFORM_X + 1.6 + Math.random() * 4.5, 0, (Math.random() - 0.5) * 10);
+      const p = this.local(st.depth + 0.6 + Math.random() * 4.5, 0, (Math.random() - 0.5) * (st.len + 2));
       if (isFree(p.x, p.z)) return p;
     }
-    return this.local(PLATFORM_X + 1.4, 0, (Math.random() - 0.5) * 3);
+    return this.local(st.depth + 0.5, 0, (Math.random() - 0.5) * 3);
   }
 
-  contains(x, z, margin) {
-    return platformContains(this.group, x, z, margin);
+  // Is a point on the station's footprint (platform, steps and buildings)?
+  contains(x, z, margin = 0) {
+    const v = this.group.worldToLocal(new THREE.Vector3(x, 0, z));
+    const st = this.style;
+    return v.x > -0.6 - margin && v.x < st.depth + margin && Math.abs(v.z) < st.len / 2 + margin;
+  }
+
+  // On the platform itself (where the doors open onto)?
+  onPlatform(local) {
+    const st = this.style;
+    return Math.abs(local.z) < st.len / 2 - 0.12 && local.x > st.px - st.width / 2 - 0.55 && local.x < st.back + 0.05;
   }
 
   // Tint the station, e.g. red while the demolish tool hovers it.
   highlight(color) {
-    this.group.traverse((o) => {
-      if (o.isMesh) o.material.emissive?.set(color ?? 0x000000);
-    });
+    highlightStation(this.group, color);
   }
 
   dispose() {
     if (this.node.station === this) this.node.station = null;
     this.group.removeFromParent();
     this.label.sprite.removeFromParent();
-    this.group.traverse((o) => {
-      if (o.isMesh) {
-        o.geometry.dispose();
-        o.material.dispose();
-      }
-    });
+    disposeStationModel(this.group);
     this.label.texture.dispose();
     this.label.sprite.material.dispose();
   }
@@ -288,15 +260,8 @@ export function placePlatform(group, pos, dir, side) {
 // Mark a path point as reached by a hop (up or down a level).
 export const jump = (p) => Object.assign(p, { jump: true });
 
-export function platformContains(group, x, z, margin) {
-  const v = group.worldToLocal(new THREE.Vector3(x, 0, z));
-  return v.x > -0.6 - margin && v.x < PLATFORM_X + 0.6 + margin && Math.abs(v.z) < PLATFORM_LEN / 2 + margin;
-}
-
-
 // ---------- Residents and passenger flow ----------
 
-const MAX_WAITING = 10;
 const BOARD_INTERVAL = 0.22;
 const MIN_DWELL = 1.4;
 const SKIP_AFTER = 8; // seconds held at a red signal before skipping a stop
@@ -496,7 +461,7 @@ export class PassengerSystem {
   #headToPlatform(r, s) {
     if (!s || !this.served.has(s)) s = this.#nearestServed(r.mesh.position);
     if (!s) return this.#stroll(r, null, 2);
-    if (s.waiting.length >= MAX_WAITING) return this.#stroll(r, s, 1);
+    if (s.waiting.length >= s.maxWaiting) return this.#stroll(r, s, 1);
     r.state = 'returning';
     r.target = s;
     r.speed = (0.9 + Math.random() * 0.2) * (r.personality?.speed ?? 1);
@@ -515,9 +480,11 @@ export class PassengerSystem {
   // Waypoints around the platform for a robot coming from the track side.
   #around(s, from) {
     const local = s.group.worldToLocal(from.clone());
-    if (local.x > PLATFORM_X + 0.7) return [];
-    const z = (local.z >= 0 ? 1 : -1) * (PLATFORM_LEN / 2 + 0.7);
-    return [s.local(local.x < -0.8 ? -1.2 : PLATFORM_X, 0, z), s.local(STEP_X + 0.6, 0, z)];
+    const st = s.style;
+    if (local.x > st.back + 0.4 && (local.x > st.depth + 0.3 || Math.abs(local.z) > st.len / 2)) return [];
+    const z = (local.z >= 0 ? 1 : -1) * (st.len / 2 + 0.7);
+    if (local.x > st.back + 0.4) return [s.local(st.depth + 0.5, 0, local.z), s.local(st.depth + 0.5, 0, z * 0.85)];
+    return [s.local(local.x < -0.8 ? -1.2 : st.px, 0, z), s.local(st.depth + 0.5, 0, z)];
   }
 
   // Hop down off the platform and stroll away.
@@ -766,12 +733,27 @@ export class PassengerSystem {
       return;
     }
     t.blockedFor = 0;
+    if (t.current) this.#missed(t.current);
     t.waitReason = null;
     t.target = target;
     t.state = 'closing';
     t.timer = 0.6;
     this.#setDoors(t, null);
     this.#emit();
+  }
+
+  // Robots still hurrying to the platform as the doors close get upset.
+  #missed(s) {
+    for (const r of this.robots) {
+      if (r.state !== 'returning' || r.target !== s || r.sulking) continue;
+      if (r.mesh.position.distanceTo(s.node.pos) > 7) continue;
+      if (Math.random() > (r.personality?.temper ?? 0.5)) continue;
+      if (!r.tantrum(2.2 + Math.random() * 1.6)) continue;
+      const f = new FloatText(Math.random() < 0.5 ? '💢 等等我！' : '💢', '#e0533f');
+      f.sprite.position.copy(r.mesh.position).add(_v.set(0, 0.7, 0));
+      f.sprite.scale.multiplyScalar(0.8);
+      this.addFloater(f);
+    }
   }
 
   // Called each frame after trains moved.
@@ -862,8 +844,7 @@ export class PassengerSystem {
   }
 
   #onPlatform(p, station) {
-    const local = station.group.worldToLocal(p.clone());
-    return Math.abs(local.z) < PLATFORM_LEN / 2 - 0.12 && Math.abs(local.x - PLATFORM_X) < 1;
+    return station.onPlatform(station.group.worldToLocal(p.clone()));
   }
 
   #usableDoors(v, station) {
@@ -1077,7 +1058,7 @@ export class PassengerSystem {
       // So are platforms and their steps.
       for (const s of this.stations) {
         const local = s.group.worldToLocal(p.clone());
-        if (Math.abs(local.z) > PLATFORM_LEN / 2 + 0.5 || local.x < -0.2 || local.x > STEP_X + 0.5) continue;
+        if (Math.abs(local.z) > s.len / 2 + 0.5 || local.x < -0.2 || local.x > s.style.depth + 0.5) continue;
         let moved = false;
         for (const b of s.blocks) {
           if (local.x < b.x0 - ROBOT_R || local.x > b.x1 + ROBOT_R || local.z < b.z0 - ROBOT_R || local.z > b.z1 + ROBOT_R) continue;
