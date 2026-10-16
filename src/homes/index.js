@@ -254,8 +254,30 @@ export class HomeSystem {
     v.done?.(r);
   }
 
+  // Other modules (roads, shops, airport...) set up after the homes and may
+  // load saved buildings without clearing scenery. Once everything exists,
+  // take down any home standing on a road or another module's building.
+  #yieldToNeighbours() {
+    if (this.settled) return;
+    this.settled = true;
+    const blockers = this.world.blockers ?? [];
+    const roads = (window.__roads ?? null)?.net;
+    const ROAD_CLEAR = 1.15; // road half width + sidewalk + a little lawn
+    for (const h of this.homes) {
+      if (h.removed) continue;
+      // Centre, corners, wall midpoints and the front step.
+      const pts = [];
+      for (const fx of [-1, 0, 1]) for (const fz of [-1, 0, 1]) pts.push(h.world((fx * W) / 2, 0, (fz * D) / 2));
+      pts.push(h.world(DOORSTEP.x, 0, DOORSTEP.z));
+      const onRoad = roads && [...(roads.segs ?? [])].length > 0 && pts.some((p) => (roads.nearestSeg(p.x, p.z)?.dist ?? Infinity) < ROAD_CLEAR);
+      const blocked = blockers.some((b) => pts.some((p) => b.hit(p.x, p.z, 0.2)));
+      if (onRoad || blocked) this.#demolish(h);
+    }
+  }
+
   // Game logic: stays at home, doors, and keeping strollers out of walls.
   update(dt) {
+    this.#yieldToNeighbours();
     for (const [r, v] of this.visits) {
       if (v.phase === 'staying' && (v.timer -= dt) <= 0) this.#leave(r, v);
     }
