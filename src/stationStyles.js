@@ -268,7 +268,7 @@ function buildTown(g, s, color, name) {
     brace.rotation.z = -0.1;
   }
   // Butterfly roof: two panels sloping in to a central gutter, coloured on top.
-  const cw = s.width + 0.3;
+  const cw = s.width + 0.12;
   for (const k of [-1, 1]) {
     const panel = add(g, rbox(cw / 2 + 0.02, 0.035, canopyLen, 0.012), M.coping, px - 0.05 + (k * cw) / 4, y + 0.9 + 0.025, 0);
     panel.rotation.z = -k * 0.1;

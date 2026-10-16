@@ -20,8 +20,9 @@
 // Register a module by adding it to MODULES below.
 
 import { homes } from './homes/index.js';
+import { shopsModule } from './shops/index.js';
 
-export const MODULES = [homes];
+export const MODULES = [homes, shopsModule];
 
 export function register(mod) {
   MODULES.push(mod);
