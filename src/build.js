@@ -58,6 +58,7 @@ export class BuildController {
     this.passengers = passengers;
     this.network = network;
     this.scenery = world.scenery;
+    this.world = world;
     this.ui = ui;
     this.tool = null;
     this.chain = null; // where the next piece of track starts
@@ -304,11 +305,19 @@ export class BuildController {
     const near = (p, q, r) => (p.x - q.x) ** 2 + (p.z - q.z) ** 2 < r * r;
     if (far.some((p) => [...this.network.edges].some((e) => e.samples.some((q) => near(p, q, TRACK_GAP))))) problems.push('太靠近其他鐵路');
     if (pts.some((p) => this.stations.some((s) => this.#onPlatformZone(s, p)))) problems.push('會壓到車站');
+    const blocker = this.#blockedBy(pts, 0.75);
+    if (blocker) problems.push(`會壓到${blocker}`);
 
     const props = this.scenery.query((x, z, r) => pts.some((p) => near(p, { x, z }, CLEAR_R + r * 0.6)));
     const cost = Math.round(length * COST.track) + props.reduce((s, p) => s + COST[p.kind], 0);
     if (!problems.length && cost > this.passengers.money) problems.push('資金不足');
     return { start, end, curve, length, props, cost, problems, ok: !problems.length };
+  }
+
+  // Feature modules (shops, homes...) register world.blockers: { label, hit(x, z, margin) }.
+  #blockedBy(points, margin) {
+    const b = this.world.blockers?.find((bl) => points.some((p) => bl.hit(p.x, p.z, margin)));
+    return b?.label ?? null;
   }
 
   #onPlatformZone(s, p) {
@@ -433,6 +442,10 @@ export class BuildController {
       return l.x > 0.4 && l.x < PLATFORM_X + 1 && Math.abs(l.z) < 4.2;
     };
     if ([...this.network.edges].some((e) => e.samples.some(inZone))) problems.push('會壓到鐵路');
+    const corners = [];
+    for (let z = -4.2; z <= 4.2; z += 0.6) for (const x of [-0.6, 0.4, PLATFORM_X, PLATFORM_X + 1.1]) corners.push(g.localToWorld(V(x, z)));
+    const blocker = this.#blockedBy(corners, 0.1);
+    if (blocker) problems.push(`會壓到${blocker}`);
     for (const z of [-4, 4]) {
       const c = g.localToWorld(V(PLATFORM_X + 1.6, z));
       if (c.x * c.x + c.z * c.z > (ISLAND_R + 0.5) ** 2) {
