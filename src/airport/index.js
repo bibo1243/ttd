@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { COST } from '../build.js';
+import { rayToGround } from '../planet.js';
 import { Robot, randomLook } from '../robots.js';
 import { Airport, FOOT, STANDS, TERM_Z, tug as makeTug } from './airport.js';
 import { Flight } from './flights.js';
@@ -146,7 +147,6 @@ class AirportSystem {
     this.boardTimer = 0;
     this.follow = null;
     this.raycaster = new THREE.Raycaster();
-    this.plane0 = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     this.obstacles = [];
 
     const style = document.createElement('style');
@@ -312,6 +312,17 @@ class AirportSystem {
     return out;
   }
 
+  // Points every metre over the footprint, for features smaller than the corner grid.
+  #footGrid(x, z, rot) {
+    const c = Math.cos(rot);
+    const s = Math.sin(rot);
+    const out = [];
+    for (let lx = FOOT.x0; lx <= FOOT.x1 + 1e-6; lx += (FOOT.x1 - FOOT.x0) / 24) {
+      for (let lz = FOOT.z0; lz <= FOOT.z1 + 1e-6; lz += (FOOT.z1 - FOOT.z0) / 18) out.push(V(x + lx * c + lz * s, z - lx * s + lz * c));
+    }
+    return out;
+  }
+
   #inFoot(x, z, cx, cz, rot, margin) {
     const dx = x - cx;
     const dz = z - cz;
@@ -329,6 +340,11 @@ class AirportSystem {
     if (rails.some((p) => this.#inFoot(p.x, p.z, x, z, rot, 0.6))) problems.push('會壓到鐵路');
     const stations = this.game.passengers.stations;
     if (stations.some((s) => this.#footCorners(x, z, rot, -0.5).some((p) => s.contains(p.x, p.z, 0.4)))) problems.push('會壓到車站');
+    // Other ground features (shops...) registered in world.blockers.
+    const grid = this.#footGrid(x, z, rot);
+    for (const b of this.game.world.blockers ?? []) {
+      if (b.label !== '機場' && grid.some((p) => b.hit(p.x, p.z, 0.3))) problems.push(`會壓到${b.label}`);
+    }
     const props = this.game.world.scenery.query((px, pz, r) => this.#inFoot(px, pz, x, z, rot, r * 0.6 + 0.3));
     const cost = AIRPORT_COST + props.reduce((sum, p) => sum + (COST[p.kind] ?? 0), 0);
     if (!problems.length && cost > this.game.money.get()) problems.push('資金不足');
@@ -493,20 +509,20 @@ class AirportSystem {
     const w = FOOT.x1 - FOOT.x0;
     const d = FOOT.z1 - FOOT.z0;
     this.ghostMat = new THREE.MeshBasicMaterial({ color: 0x4cc47a, transparent: true, opacity: 0.4, depthWrite: false });
-    const pad = new THREE.Mesh(new THREE.PlaneGeometry(w, d), this.ghostMat);
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(w, d, 32, 24), this.ghostMat);
     pad.rotation.x = -Math.PI / 2;
     pad.position.set((FOOT.x0 + FOOT.x1) / 2, 0.12, (FOOT.z0 + FOOT.z1) / 2);
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false });
-    const runway = new THREE.Mesh(new THREE.PlaneGeometry(21.2, 1.6), new THREE.MeshBasicMaterial({ color: 0x3a3f47, transparent: true, opacity: 0.7, depthWrite: false }));
+    const runway = new THREE.Mesh(new THREE.PlaneGeometry(21.2, 1.6, 28, 1), new THREE.MeshBasicMaterial({ color: 0x3a3f47, transparent: true, opacity: 0.7, depthWrite: false }));
     runway.rotation.x = -Math.PI / 2;
     runway.position.set(0, 0.14, -7);
-    const center = new THREE.Mesh(new THREE.PlaneGeometry(19, 0.08), lineMat);
+    const center = new THREE.Mesh(new THREE.PlaneGeometry(19, 0.08, 24, 1), lineMat);
     center.rotation.x = -Math.PI / 2;
     center.position.set(0, 0.15, -7);
     const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.6, 1.4, 3), lineMat);
     arrow.rotation.set(-Math.PI / 2, 0, -Math.PI / 2);
     arrow.position.set(11.5, 0.16, -7);
-    const term = new THREE.Mesh(new THREE.BoxGeometry(15.8, 1.3, 3.1), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false }));
+    const term = new THREE.Mesh(new THREE.BoxGeometry(15.8, 1.3, 3.1, 20, 1, 4), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false }));
     term.position.set(-0.3, 0.65, TERM_Z + 1.55);
     g.add(pad, runway, center, arrow, term);
     for (const o of g.children) o.renderOrder = 6;
@@ -518,7 +534,7 @@ class AirportSystem {
     const rect = this.game.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.game.camera);
-    const hit = this.raycaster.ray.intersectPlane(this.plane0, new THREE.Vector3());
+    const hit = rayToGround(this.raycaster.ray);
     if (!hit) return;
     this.pointer = hit;
     this.#preview();

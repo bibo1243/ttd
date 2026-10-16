@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { bendable } from './bend.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { glassMat } from '../parts.js';
 import { Robot } from '../robots.js';
@@ -832,6 +833,7 @@ export class Airport {
     this.tower = tower(this.ground);
     baggageTrain(this.ground);
     fuelTruck(this.ground);
+    bendable(this.group);
     this.group.updateMatrixWorld(true);
   }
 
