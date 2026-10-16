@@ -19,6 +19,15 @@ export class Scatter {
     this.hideDistance = hideDistance;
     this.parts = [];
     this.chunks = new Map();
+    this.props = []; // {x, z, removed} per prop, so whole props can be removed later
+    this.meshes = []; // {mesh, props: prop index per instance}
+    this.prop = -1;
+  }
+
+  // Start a new prop (a tree, a house...) rooted at x, z. Parts added until
+  // the next beginProp belong to it and are removed together.
+  beginProp(x, z) {
+    this.prop = this.props.push({ x, z, removed: false }) - 1;
   }
 
   // low: geometry used far away (defaults to the same one); null drops the
@@ -43,7 +52,7 @@ export class Scatter {
     }
     let list = chunk.items.get(part.id);
     if (!list) chunk.items.set(part.id, (list = []));
-    list.push(matrix.clone(), color === undefined ? null : new THREE.Color(color));
+    list.push(matrix.clone(), color === undefined ? null : new THREE.Color(color), this.prop);
   }
 
   build() {
@@ -62,13 +71,16 @@ export class Scatter {
         const part = this.parts[id];
         for (const [group, geo] of [[near, part.geometry], [far, part.low]]) {
           if (!geo) continue;
-          const count = list.length / 2;
+          const count = list.length / 3;
           const mesh = new THREE.InstancedMesh(geo, part.material, count);
+          const props = [];
           for (let i = 0; i < count; i++) {
-            mesh.setMatrixAt(i, local.multiplyMatrices(toLocal, list[i * 2]));
-            const c = list[i * 2 + 1];
+            mesh.setMatrixAt(i, local.multiplyMatrices(toLocal, list[i * 3]));
+            const c = list[i * 3 + 1];
             if (c) mesh.setColorAt(i, c);
+            props.push(list[i * 3 + 2]);
           }
+          this.meshes.push({ mesh, props });
           mesh.castShadow = part.castShadow;
           mesh.receiveShadow = part.receiveShadow;
           mesh.computeBoundingSphere();
@@ -83,5 +95,30 @@ export class Scatter {
       root.add(lod);
     }
     return root;
+  }
+
+  // Remove every prop rooted within r of (x, z), e.g. to clear the ground for
+  // newly built track. Returns how many props were removed.
+  removeNear(x, z, r) {
+    const hit = new Set();
+    this.props.forEach((p, i) => {
+      if (!p.removed && (p.x - x) ** 2 + (p.z - z) ** 2 < r * r) {
+        p.removed = true;
+        hit.add(i);
+      }
+    });
+    if (!hit.size) return 0;
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (const { mesh, props } of this.meshes) {
+      let changed = false;
+      props.forEach((p, i) => {
+        if (hit.has(p)) {
+          mesh.setMatrixAt(i, zero);
+          changed = true;
+        }
+      });
+      if (changed) mesh.instanceMatrix.needsUpdate = true;
+    }
+    return hit.size;
   }
 }

@@ -59,6 +59,7 @@ function put(scatter, part, root, x, y, z, sx = 1, sy = 1, sz = 1, color) {
 }
 
 function makeTree(rand, scatter, P, x, z) {
+  scatter.beginProp(x, z);
   const h = 0.5 + rand() * 0.5;
   const greens = [0x5fae5a, 0x4c9a52, 0x78c06a, 0x3f8a4f];
   const color = greens[Math.floor(rand() * greens.length)];
@@ -77,6 +78,7 @@ function makeTree(rand, scatter, P, x, z) {
 }
 
 function makeHouse(rand, scatter, P, x, z) {
+  scatter.beginProp(x, z);
   const walls = [0xf6e7cf, 0xfbd5c0, 0xdbe8f4, 0xf4f0d2];
   const roofs = [0xd65a4a, 0x4e7fb8, 0x6b4e3d, 0x3f8a6b];
   const w = 0.8 + rand() * 0.5;
@@ -96,6 +98,7 @@ function makeHouse(rand, scatter, P, x, z) {
 }
 
 function makeRock(rand, scatter, P, x, z) {
+  scatter.beginProp(x, z);
   const r = 0.15 + rand() * 0.2;
   const root = new THREE.Matrix4().compose(
     _p.set(x, 0.05, z),
@@ -200,7 +203,15 @@ export function buildWorld(scene, track, stations = [], opts = {}) {
 
   // Clouds drift slowly; return them so main can animate.
   const clouds = makeClouds(rand, scene, 9);
-  return { clouds, obstacles };
+  // Clears trees, houses and rocks from ground the player builds on.
+  const clearArea = (x, z, r) => {
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      const o = obstacles[i];
+      if ((o.x - x) ** 2 + (o.z - z) ** 2 < r * r) obstacles.splice(i, 1);
+    }
+    return scatter.removeNear(x, z, r);
+  };
+  return { clouds, obstacles, clearArea };
 }
 
 // A big mainland around the island, packed with scenery. Only used with
