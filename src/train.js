@@ -241,7 +241,9 @@ export class Train {
     const span = path.span(tailLen - half - 0.2, stopAt + half + 0.2);
     if (!this.#canHold(span)) return 'blocked';
     this.path = path;
-    if (turn) this.reversed = !this.reversed;
+    // Turning back at a terminus: the engine runs round to the other end
+    // so it always leads (no driving backwards).
+    if (turn) this.reversed = false;
     this.distance = tailLen + half;
     this.stopAt = stopAt;
     this.reserveTo = stopAt + half + 0.2;

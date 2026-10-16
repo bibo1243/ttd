@@ -9,7 +9,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 const UP = new THREE.Vector3(0, 1, 0);
 const GAUGE = 0.5;
 const SMOOTH = Math.cos(THREE.MathUtils.degToRad(35)); // largest bend allowed at a node
-const REVERSE_COST = 30; // prefer driving on over turning back at a station
+const REVERSE_COST = 200; // prefer driving on over turning back at a station
 export const NODE_CLEAR = 3; // a train within this of a node holds it (switches overlap)
 
 const MAT = {
