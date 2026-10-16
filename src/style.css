@@ -1,0 +1,38 @@
+:root {
+  --panel: rgba(255, 255, 255, 0.82);
+  --ink: #3b3f4a;
+  --muted: #8a8f9c;
+  --accent: #e85d4a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #bfe3f2; }
+body { font-family: "Noto Sans TC", "PingFang TC", system-ui, sans-serif; color: var(--ink); }
+#app { position: fixed; inset: 0; }
+#app canvas { display: block; }
+#hud {
+  position: fixed; top: 16px; left: 16px;
+  width: min(280px, calc(100vw - 32px));
+  padding: 14px 16px; border-radius: 16px;
+  background: var(--panel); backdrop-filter: blur(8px);
+  box-shadow: 0 6px 24px rgba(40, 70, 90, 0.18);
+  display: flex; flex-direction: column; gap: 10px;
+  user-select: none;
+}
+.title { font-weight: 700; font-size: 17px; }
+.title span { font-weight: 500; font-size: 12px; color: var(--muted); margin-left: 4px; }
+.row { display: flex; align-items: center; gap: 8px; }
+button {
+  flex: 1; border: 0; border-radius: 10px; padding: 8px 10px;
+  font: inherit; font-size: 14px; cursor: pointer;
+  background: #eef2f5; color: var(--ink);
+  transition: transform 0.08s, background 0.15s;
+}
+button:hover { background: #e2e8ee; }
+button:active { transform: scale(0.96); }
+button.primary { background: var(--accent); color: #fff; }
+button.primary:hover { background: #d94f3d; }
+button.on { background: #4a90c8; color: #fff; }
+.slider input { flex: 1; accent-color: var(--accent); }
+.slider output { width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.hint { font-size: 12px; color: var(--muted); }

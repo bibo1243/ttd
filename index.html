@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>迷你交通大亨</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud">
+      <div class="title">迷你交通大亨 <span>原型 0.1</span></div>
+      <div class="row">
+        <button id="toggle" class="primary">⏸ 暫停</button>
+        <button id="camera">🎥 跟隨火車</button>
+      </div>
+      <label class="row slider">
+        <span>速度</span>
+        <input id="speed" type="range" min="0" max="12" step="0.1" value="4" />
+        <output id="speedOut">4.0</output>
+      </label>
+      <div class="row">
+        <button id="addCar">＋ 車廂</button>
+        <button id="removeCar">－ 車廂</button>
+        <span id="carCount" class="muted"></span>
+      </div>
+      <div class="hint">拖曳旋轉・滾輪縮放・右鍵平移</div>
+    </div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
