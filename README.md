@@ -14,6 +14,8 @@ npm run dev      # 開發伺服器
 npm run build    # 輸出到 dist/
 ```
 
+網址加上 `?perf` 會在右下角顯示 FPS、draw call 和三角形數；加上 `?stress` 會在小島外圍生成一片大陸（6000 棵樹、800 棟房子、1000 顆石頭），用來測試大地圖效能。
+
 ## 結構
 
 - `src/main.js`：場景、燈光、相機與操作面板
@@ -25,5 +27,7 @@ npm run build    # 輸出到 dist/
 - `src/stations.js`：車站、居民行程（散步、候車、上下車）與收入
 - `src/robots.js`：機器人模型、穿著、隨身物品與列車長
 - `src/world.js`：小島、樹、房子、雲
+- `src/instancing.js`：大量靜態物件的繪製（Scatter：instancing、分區視錐剔除、遠處 LOD）
+- `src/perf.js`：效能工具
 
 技術：Three.js + Vite。

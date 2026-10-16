@@ -5,6 +5,7 @@ import { Track } from './track.js';
 import { Train, TRAIN_TYPES } from './train.js';
 import { buildWorld } from './world.js';
 import { PassengerSystem, createStations } from './stations.js';
+import { params, setupPerf } from './perf.js';
 
 const app = document.getElementById('app');
 
@@ -60,7 +61,8 @@ const track = new Track([
 scene.add(track.group);
 
 const stations = createStations(scene, track);
-const { clouds, obstacles } = buildWorld(scene, track, stations);
+const { clouds, obstacles } = buildWorld(scene, track, stations, { stress: params.has('stress') });
+if (params.has('stress')) controls.maxDistance = 160;
 const train = new Train(track, scene, 'steam');
 train.distance = 6;
 const passengers = new PassengerSystem(scene, track, train, stations, obstacles);
@@ -153,6 +155,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+const perf = setupPerf(renderer);
 const clock = new THREE.Clock();
 const lastTarget = new THREE.Vector3();
 
@@ -191,6 +194,7 @@ function tick() {
 
   controls.update();
   renderer.render(scene, camera);
+  perf.frame();
   requestAnimationFrame(tick);
 }
 tick();
@@ -203,3 +207,4 @@ const fastForward = (seconds) => {
   }
 };
 window.__game = { train, camera, controls, passengers, stations, fastForward };
+window.__perf = { ...perf, bench: (n) => perf.bench(() => renderer.render(scene, camera), n) };
