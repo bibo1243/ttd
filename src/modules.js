@@ -21,8 +21,9 @@
 
 import { homes } from './homes/index.js';
 import { shopsModule } from './shops/index.js';
+import { airportModule } from './airport/index.js';
 
-export const MODULES = [homes, shopsModule];
+export const MODULES = [homes, shopsModule, airportModule];
 
 export function register(mod) {
   MODULES.push(mod);
