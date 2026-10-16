@@ -326,10 +326,11 @@ export class ShopSystem {
     this.#bindInput();
     // Rails and platforms must not run through shops.
     world.blockers ??= [];
-    world.blockers.push({
+    this.blocker = {
       label: '店面',
       hit: (x, z, m = 0) => this.shops.some((s) => inBox(s.box, x, z, m)),
-    });
+    };
+    world.blockers.push(this.blocker);
     // Starting over clears the shops too.
     const reset = builder.reset.bind(builder);
     builder.reset = () => {
@@ -487,6 +488,13 @@ export class ShopSystem {
     const grid = [];
     for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) grid.push([box.minX + ((box.maxX - box.minX) * i) / 4, box.minZ + ((box.maxZ - box.minZ) * j) / 4]);
     if (stations.some((s) => grid.some(([gx, gz]) => s.contains(gx, gz, 0.3)))) problems.push('會壓到車站');
+    // Roads, bus stops, the airport... anything other modules registered.
+    const fine = [];
+    const nx = Math.ceil((box.maxX - box.minX) / 0.3);
+    const nz = Math.ceil((box.maxZ - box.minZ) / 0.3);
+    for (let i = 0; i <= nx; i++) for (let j = 0; j <= nz; j++) fine.push([box.minX + ((box.maxX - box.minX) * i) / nx, box.minZ + ((box.maxZ - box.minZ) * j) / nz]);
+    const other = (this.world.blockers ?? []).find((b) => b !== this.blocker && fine.some(([fx, fz]) => b.hit(fx, fz, 0.15)));
+    if (other) problems.push(`會壓到${other.label}`);
     const props = this.world.scenery.query((px, pz, r) => inBox(box, px, pz, r * 0.6 + 0.1));
     const cost = SHOP_TYPES[type].cost + props.reduce((sum, p) => sum + (COST[p.kind] ?? 0), 0);
     if (!problems.length && cost > this.game.money.get()) problems.push('資金不足');
