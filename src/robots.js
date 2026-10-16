@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { BatchedPart } from './batching.js';
 
 // Little robot residents. Each one has its own outfit and something it
 // carries around; the glowing antenna tip shows where it is heading.
@@ -46,8 +47,10 @@ const SHIRTS = [0xe85d4a, 0xf2a541, 0x7bc67b, 0x4a90c8, 0x9b7fd1, 0xe8789a, 0x56
 const ACCENTS = [0xffffff, 0x2f3440, 0xf2c14e, 0xd94a3a, 0x3a86d4, 0x2e7d5b, 0xf7a6c1];
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
+// Robot parts are drawn in shared batches (see batching.js), so a crowd of
+// residents costs a handful of draw calls.
 const mesh = (geo, mat, x = 0, y = 0, z = 0) => {
-  const m = new THREE.Mesh(geo, mat);
+  const m = new BatchedPart(geo, mat);
   m.position.set(x, y, z);
   return m;
 };
@@ -371,7 +374,7 @@ function buildRobot(look, r) {
   if (look.driver) conductorCap(inner);
 
   g.traverse((c) => {
-    if (c.isMesh) {
+    if (c.isBatchedPart) {
       c.castShadow = true;
       c.receiveShadow = false; // they ride under car roofs
     }

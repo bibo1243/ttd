@@ -6,6 +6,7 @@ import { buildWorld } from './world.js';
 import { PassengerSystem } from './stations.js';
 import { BuildController } from './build.js';
 import { params, setupPerf } from './perf.js';
+import { batcher } from './batching.js';
 
 const app = document.getElementById('app');
 
@@ -21,6 +22,7 @@ app.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xbfe3f2);
 scene.fog = new THREE.Fog(0xbfe3f2, 50, 130);
+batcher.install(scene);
 // Soft studio reflections give painted metal and glass a polished look.
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;

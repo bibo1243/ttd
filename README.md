@@ -38,6 +38,7 @@ npm run build    # 輸出到 dist/
 - `src/robots.js`：機器人模型、穿著、隨身物品與列車長
 - `src/world.js`：小島、樹、房子、雲
 - `src/instancing.js`：大量靜態物件的繪製（Scatter：instancing、分區視錐剔除、遠處 LOD）
+- `src/batching.js`：機器人零件的批次繪製（BatchedPart：每個零件照常放進場景階層，實際由共用的 BatchedMesh 畫出）
 - `src/perf.js`：效能工具
 
 技術：Three.js + Vite。
