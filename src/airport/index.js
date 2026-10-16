@@ -488,9 +488,10 @@ class AirportSystem {
     if (this.airport) return this.#fleetCard();
     if (this.tool) return this.#end();
     this.tool = true;
+    this.nearKey = null;
     this.button.classList.add('on');
     if (!this.ghost) this.#makeGhost();
-    this.#card('蓋機場', `移動滑鼠選位置，可以蓋在島上或海上（會填海造陸）。按 R 旋轉跑道方向。<br>費用 <b>${money(AIRPORT_COST)}</b> 起。`, [
+    this.#card('蓋機場', `機場比島還大，通常要蓋在島邊的海上（會填海造陸）。移動滑鼠選位置，放不下時會自動移到最近可以蓋的地方。按 R 旋轉跑道方向。<br>費用 <b>${money(AIRPORT_COST)}</b> 起。`, [
       { label: '旋轉', run: () => this.#rotate(1) },
       { label: '取消', run: () => this.#end() },
     ]);
@@ -542,15 +543,47 @@ class AirportSystem {
 
   #preview() {
     const p = this.pointer;
-    const x = Math.round(p.x * 2) / 2;
-    const z = Math.round(p.z * 2) / 2;
+    let x = Math.round(p.x * 2) / 2;
+    let z = Math.round(p.z * 2) / 2;
     this.plan = this.#plan(x, z, this.rot);
+    // The airport is bigger than the island, so a spot under the cursor
+    // rarely fits: slide the ghost to the nearest place it does.
+    const fits = (plan) => plan.problems.every((q) => q === '資金不足');
+    let moved = false;
+    if (!fits(this.plan)) {
+      const key = `${x},${z},${this.rot}`;
+      if (this.nearKey !== key) {
+        this.nearKey = key;
+        this.near = null;
+        // Free ground is usually out on the water, so look outward along
+        // the line from the island's middle through the cursor first.
+        const base = Math.atan2(z, x);
+        const cands = [];
+        for (let k = -4; k <= 4; k++) {
+          const a = base + k * 0.14;
+          for (let r = 0; r <= MAX_REACH; r += 1) cands.push([Math.round(Math.cos(a) * r * 2) / 2, Math.round(Math.sin(a) * r * 2) / 2]);
+        }
+        cands.sort((p1, p2) => (p1[0] - x) ** 2 + (p1[1] - z) ** 2 - ((p2[0] - x) ** 2 + (p2[1] - z) ** 2));
+        for (const [nx, nz] of cands) {
+          const plan = this.#plan(nx, nz, this.rot);
+          if (fits(plan)) {
+            this.near = plan;
+            break;
+          }
+        }
+      }
+      if (this.near) {
+        this.plan = this.near;
+        ({ x, z } = this.near);
+        moved = true;
+      }
+    }
     this.ghost.visible = true;
     this.ghost.position.set(x, 0, z);
     this.ghost.rotation.y = this.rot;
     this.ghostMat.color.set(this.plan.ok ? 0x4cc47a : 0xf0605a);
     const clear = this.#clearText(this.plan.props);
-    const sea = Math.hypot(x, z) > 18 ? '・填海造陸' : '';
+    const sea = (Math.hypot(x, z) > 18 ? '・填海造陸' : '') + (moved ? '<br>這裡放不下，已移到最近可以蓋的地方。' : '');
     const info = `費用 <b>${money(this.plan.cost)}</b>${sea}${clear}` +
       (this.plan.ok ? '<br>點一下蓋在這裡，按 R 旋轉。' : `<br><span class="bad">${this.plan.problems.join('、')}</span>`);
     this.#card('蓋機場', info, [

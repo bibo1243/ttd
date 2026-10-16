@@ -76,7 +76,7 @@ class Shop {
     this.bubble.position.set(0, this.bounds.top + 0.55, 0);
     root.add(this.bubble);
     this.box = worldBox(this);
-    this.obstacle = { x, z, r: Math.max(this.box.maxX - this.box.minX, this.box.maxZ - this.box.minZ) * 0.5 };
+    this.obstacle = { x, z, r: Math.max(this.box.maxX - this.box.minX, this.box.maxZ - this.box.minZ) * 0.5, box: this.box };
   }
 
   have(g) {

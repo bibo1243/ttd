@@ -1012,6 +1012,28 @@ export class PassengerSystem {
 
   // ---------- Bumping into things ----------
 
+  // Buildings with a footprint box (shops): slide robots along the walls
+  // toward where they are headed instead of letting them walk through.
+  #keepOutOfBox(r, b, dt) {
+    const p = r.mesh.position;
+    const m = ROBOT_R;
+    if (p.x < b.minX - m || p.x > b.maxX + m || p.z < b.minZ - m || p.z > b.maxZ + m) return;
+    const goal = r.path[r.path.length - 1];
+    // Robots heading inside (porters delivering) are let through.
+    if (goal && goal.x > b.minX - 0.35 && goal.x < b.maxX + 0.35 && goal.z > b.minZ - 0.35 && goal.z < b.maxZ + 0.35) return;
+    const next = r.path[0];
+    const slide = (r.speed ?? 0.5) * dt * 0.8;
+    const pen = [
+      [p.x - (b.minX - m), 'x', b.minX - m],
+      [b.maxX + m - p.x, 'x', b.maxX + m],
+      [p.z - (b.minZ - m), 'z', b.minZ - m],
+      [b.maxZ + m - p.z, 'z', b.maxZ + m],
+    ].reduce((a, c) => (c[0] < a[0] ? c : a));
+    p[pen[1]] = pen[2];
+    const other = pen[1] === 'x' ? 'z' : 'x';
+    if (next) p[other] += Math.sign(next[other] - p[other]) * Math.min(slide, Math.abs(next[other] - p[other]));
+  }
+
   #collide(dt) {
     const list = [];
     for (const r of this.robots) {
@@ -1049,6 +1071,10 @@ export class PassengerSystem {
       if (p.y > 0.05) continue; // up on a platform or step
       // Trees and houses are solid.
       for (const o of this.obstacles) {
+        if (o.box) {
+          this.#keepOutOfBox(r, o.box, dt);
+          continue;
+        }
         const solid = o.kind === 'house' ? 0.62 : 0.2;
         const dx = p.x - o.x;
         const dz = p.z - o.z;
