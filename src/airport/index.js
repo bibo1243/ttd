@@ -23,7 +23,8 @@ const CSS = `
 #bcInfo .air-row .sw { width: 12px; height: 12px; border-radius: 4px; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
 #bcInfo .air-row .nm { flex: 1; color: #2c3440; }
 #bcInfo .air-row .st { font-size: 12px; font-weight: 600; }
-#bcInfo .air-row button { padding: 3px 8px; font-size: 12px; }
+#bcInfo .air-row button { flex: none; padding: 3px 8px; font-size: 12px; }
+#bcInfo .air-row button[data-buy] { min-width: 64px; }
 #bcInfo .air-sub { font-weight: 700; color: #2c3440; margin-top: 6px; }
 #bcInfo .air-form { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; margin: 4px 0; }
 #bcInfo .air-form input[type=text], #bcInfo .air-form select { font: inherit; padding: 3px 6px; border-radius: 8px; border: 1px solid #d5dbe2; }
@@ -139,7 +140,7 @@ class AirportSystem {
     this.flights = [];
     this.custom = [];
     this.crowd = new Crowd();
-    this.groundBy = null;
+    this.locks = { apron: null, hold: null, runway: null };
     this.tool = false;
     this.rot = 0;
     this.boardTimer = 0;
@@ -208,14 +209,22 @@ class AirportSystem {
     camera.position.add(controls.target.clone().sub(before));
   }
 
-  claimGround(f) {
-    if (this.groundBy && this.groundBy !== f) return false;
-    this.groundBy = f;
+  // Three things are handed out one plane at a time: the apron and taxiway,
+  // the holding point short of the runway, and the runway itself. Planes
+  // waiting to land get the runway before planes waiting to take off.
+  claim(names, f) {
+    if (names.some((n) => this.locks[n] && this.locks[n] !== f)) return false;
+    if (names.includes('runway') && !f.wantsToLand && this.flights.some((o) => o !== f && o.wantsToLand)) return false;
+    for (const n of names) this.locks[n] = f;
     return true;
   }
 
-  releaseGround(f) {
-    if (this.groundBy === f) this.groundBy = null;
+  release(name, f) {
+    if (this.locks[name] === f) this.locks[name] = null;
+  }
+
+  #releaseAll(f) {
+    for (const n of Object.keys(this.locks)) this.release(n, f);
   }
 
   landed(f) {
@@ -337,7 +346,7 @@ class AirportSystem {
     this.#useLamps(this.airport.board.lamps, { color: 0xffd29a, intensity: 2.2, distance: 7, always: true }, this.airport);
     this.game.look?.onTime?.((night) => this.airport?.setNight(night));
     this.tug = new Tug(this.airport);
-    this.groundBy = null;
+    this.locks = { apron: null, hold: null, runway: null };
     // Residents keep off the airfield.
     for (const p of this.#footCorners(plan.x, plan.z, plan.rot, -1.5)) {
       if (Math.hypot(p.x, p.z) < 23) {
@@ -413,7 +422,7 @@ class AirportSystem {
   #sell(f, force = false) {
     if (!force && (!f.atStand || f.pax.length || f.queue.length)) return 0;
     for (const r of [...f.pax, ...f.queue]) this.crowd.put(r);
-    this.releaseGround(f);
+    this.#releaseAll(f);
     if (this.tug?.flight === f) this.tug.release();
     for (const off of f.unlamp ?? []) off();
     f.dispose();

@@ -30,7 +30,7 @@ export function describe(t) {
   const price = Math.round((base + seats * per + (engines - 2) * 300) / 50) * 50;
   const fare = { lark: 30, gull: 36, whale: 45 }[t.family];
   const flight = {
-    lark: { cruise: 8, alt: 7, radius: 30 },
+    lark: { cruise: 9, alt: 7, radius: 30 },
     gull: { cruise: 10, alt: 9.5, radius: 33 },
     whale: { cruise: 12.5, alt: 12, radius: 37 },
   }[t.family];

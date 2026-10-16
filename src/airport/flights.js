@@ -7,6 +7,8 @@ import {
   TAKEOFF_START,
   TERM_Z,
   TOUCHDOWN_X,
+  exitPath,
+  lineupPath,
   pushbackPath,
   smoothPath,
   stairTruck,
@@ -20,8 +22,8 @@ import { Plane } from './planes.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const V = (x, z, y = 0) => new THREE.Vector3(x, y, z);
-const TAXI = 1.3;
-const PUSH = 0.45;
+const TAXI = 1.7;
+const PUSH = 0.6;
 
 const STATUS = {
   arriving: ['旅客下機', '#8fd0ff'],
@@ -30,11 +32,14 @@ const STATUS = {
   tug: ['準備推出', '#f2c230'],
   pushback: ['推出中', '#f2c230'],
   taxiOut: ['滑行中', '#f2c230'],
-  lineup: ['跑道待命', '#ff9a5a'],
+  hold: ['等候起飛', '#f2c230'],
+  lineup: ['進入跑道', '#ff9a5a'],
+  spool: ['跑道待命', '#ff9a5a'],
   takeoff: ['起飛', '#ff9a5a'],
   lap: ['環島飛行', '#8fd0ff'],
-  hold: ['盤旋等待', '#c9a0ff'],
   approach: ['降落中', '#ff9a5a'],
+  exit: ['脫離跑道', '#f2c230'],
+  exitWait: ['等候滑行', '#f2c230'],
   taxiIn: ['滑行回機坪', '#f2c230'],
 };
 
@@ -104,8 +109,12 @@ export class Flight {
   }
 
   get status() {
-    const st = this.state === 'lap' && this.laps > 0 ? 'hold' : this.state;
-    return STATUS[st] ?? ['', '#ffffff'];
+    if (this.state === 'lap' && this.laps > 0) return ['盤旋等待', '#c9a0ff'];
+    return STATUS[this.state] ?? ['', '#ffffff'];
+  }
+
+  get waiting() {
+    return ['hold', 'spool', 'exitWait'].includes(this.state);
   }
 
   get atStand() {
@@ -226,12 +235,12 @@ export class Flight {
     const a = this.airport;
     const t = this.type;
     const R = this.radius;
-    const glide = (x) => Math.max(0, (TOUCHDOWN_X - x) * 0.13);
-    const ext = a.toWorld(V(TOUCHDOWN_X - 40, RW_Z, glide(TOUCHDOWN_X - 40)));
+    const glide = (x) => Math.max(0, (TOUCHDOWN_X - x) * 0.15);
+    const ext = a.toWorld(V(TOUCHDOWN_X - 30, RW_Z, glide(TOUCHDOWN_X - 30)));
     const n = a.dirToWorld(V(0, 1));
     const start = V(Math.cos(this.joinAngle) * R, Math.sin(this.joinAngle) * R, t.alt);
     const side = Math.sign(start.clone().sub(ext).dot(n)) || 1;
-    const base = a.toWorld(V(TOUCHDOWN_X - 46, RW_Z + side * 10, glide(TOUCHDOWN_X - 46) + 0.6));
+    const base = a.toWorld(V(TOUCHDOWN_X - 36, RW_Z + side * 8, glide(TOUCHDOWN_X - 36) + 0.6));
     // Follow the circle round to the point nearest the base leg.
     const baseAng = Math.atan2(base.z, base.x);
     let span = THREE.MathUtils.euclideanModulo((baseAng - this.joinAngle) * this.turn, Math.PI * 2) - 0.5;
@@ -243,7 +252,7 @@ export class Flight {
       pts.push(V(Math.cos(ang) * R, Math.sin(ang) * R, THREE.MathUtils.lerp(t.alt, base.y + 1.5, k * k)));
     }
     pts.push(base, ext);
-    for (const x of [TOUCHDOWN_X - 30, TOUCHDOWN_X - 20, TOUCHDOWN_X - 12, TOUCHDOWN_X - 6, TOUCHDOWN_X - 2]) {
+    for (const x of [TOUCHDOWN_X - 22, TOUCHDOWN_X - 14, TOUCHDOWN_X - 8, TOUCHDOWN_X - 3]) {
       pts.push(a.toWorld(V(x, RW_Z, glide(x))));
     }
     for (const x of [TOUCHDOWN_X, TOUCHDOWN_X + 4, TOUCHDOWN_X + 8, ROLLOUT_X]) pts.push(a.toWorld(V(x, RW_Z, 0)));
@@ -253,8 +262,8 @@ export class Flight {
     // Arc length where the wheels touch: walk back from the end.
     const tdS = L - (ROLLOUT_X - TOUCHDOWN_X);
     this.touchdownS = tdS;
-    this.gearS = Math.max(0, tdS - 46);
-    const app = t.cruise * 0.55;
+    this.gearS = Math.max(0, tdS - 36);
+    const app = t.cruise * 0.68;
     return new Route(curve, {
       speed: (s) => {
         if (s < this.gearS) return THREE.MathUtils.lerp(t.cruise, app, Math.min(1, s / Math.max(1, this.gearS)));
@@ -279,7 +288,8 @@ export class Flight {
       case 'ready':
         this.truckT = Math.max(0, this.truckT - dt * 0.5);
         this.#placeTruck();
-        if (this.truckT === 0 && this.sys.claimGround(this)) {
+        // Push back once the apron is clear and the holding point is free.
+        if (this.truckT === 0 && this.sys.claim(['apron', 'hold'], this)) {
           this.state = 'tug';
           this.timer = 0;
           p.engineTarget = 0.35;
@@ -291,9 +301,22 @@ export class Flight {
           this.#startRoute('pushback', this.#ground(pushbackPath(this.stand, this.centerZ), { reverse: true, speed: () => PUSH, accel: 0.6 }));
         }
         break;
-      case 'lineup':
+      case 'hold':
+        this.v = 0;
+        if (this.sys.claim(['runway'], this)) {
+          this.#startRoute('lineup', this.#ground(lineupPath(), { speed: () => TAXI, accel: 0.8 }));
+        }
+        break;
+      case 'spool':
         this.v = 0;
         if (this.timer > 1.2) this.#startRoute('takeoff', this.#departure());
+        break;
+      case 'exitWait':
+        this.v = 0;
+        if (this.sys.claim(['apron'], this)) {
+          this.sys.release('runway', this);
+          this.#startRoute('taxiIn', this.#ground(taxiInPath(this.stand, this.centerZ), { speed: () => TAXI, accel: 0.9 }));
+        }
         break;
     }
     if (this.route) this.#fly(dt);
@@ -311,8 +334,7 @@ export class Flight {
     this.s += this.v * dt;
     const done = this.s >= r.length;
     if (done && r.stop) this.s = r.length;
-    const s = done ? (r.stop ? r.length : this.s % r.length) : this.s;
-    r.pose(s, this.pos, this.dir);
+    r.pose(Math.min(this.s, r.length), this.pos, this.dir);
 
     // Heading, climb angle and a bank into turns.
     const yaw = Math.atan2(this.dir.x, this.dir.z);
@@ -336,10 +358,8 @@ export class Flight {
     if (this.state === 'takeoff') {
       p.engineTarget = 1;
       p.landingLights = this.pos.y < 6;
-      if (this.pos.y > 1.6) {
-        p.gearDown = Math.max(0, p.gearDown - dt * 0.6);
-        this.sys.releaseGround(this);
-      }
+      if (this.pos.y > 0.6) this.sys.release('runway', this);
+      if (this.pos.y > 1.6) p.gearDown = Math.max(0, p.gearDown - dt * 0.6);
     } else if (this.state === 'approach') {
       p.landingLights = this.s > this.gearS - 10;
       if (this.s > this.gearS) p.gearDown = Math.min(1, p.gearDown + dt * 0.6);
@@ -347,7 +367,7 @@ export class Flight {
     } else if (this.state === 'lap') {
       p.landingLights = false;
     } else {
-      p.landingLights = this.state === 'taxiOut' || this.state === 'taxiIn';
+      p.landingLights = ['taxiOut', 'lineup', 'exit', 'taxiIn'].includes(this.state);
     }
 
     if (this.state === 'pushback' || this.state === 'tug') this.sys.tug.follow(this);
@@ -359,8 +379,15 @@ export class Flight {
         this.#startRoute('taxiOut', this.#ground(taxiOutPath(this.stand), { speed: () => TAXI, accel: 0.8 }));
         break;
       case 'taxiOut':
+        // Waiting at the holding point, out of everyone's way.
         this.route = null;
-        this.state = 'lineup';
+        this.state = 'hold';
+        this.sys.release('apron', this);
+        break;
+      case 'lineup':
+        this.route = null;
+        this.sys.release('hold', this);
+        this.state = 'spool';
         this.timer = 0;
         p.engineTarget = 1;
         break;
@@ -370,7 +397,9 @@ export class Flight {
         this.s = this.s - r.length;
         break;
       case 'lap':
-        if (this.sys.claimGround(this)) {
+        this.wantsToLand = true;
+        if (this.sys.claim(['runway'], this)) {
+          this.wantsToLand = false;
           const carry = this.s - r.length;
           this.#startRoute('approach', this.#approach());
           this.s = carry;
@@ -380,15 +409,20 @@ export class Flight {
         }
         break;
       case 'approach':
-        this.#startRoute('taxiIn', this.#ground(taxiInPath(this.stand, this.centerZ), { speed: () => TAXI, accel: 0.9 }));
         p.engineTarget = 0.35;
+        this.#startRoute('exit', this.#ground(exitPath(), { speed: () => TAXI, accel: 0.9 }));
+        this.v = TAXI;
+        break;
+      case 'exit':
+        this.route = null;
+        this.state = 'exitWait';
         break;
       case 'taxiIn':
         this.route = null;
         this.#park();
         p.engineTarget = 0;
         p.landingLights = false;
-        this.sys.releaseGround(this);
+        this.sys.release('apron', this);
         this.sys.landed(this);
         this.state = 'arriving';
         this.timer = 0;

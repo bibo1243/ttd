@@ -102,36 +102,46 @@ export function pushbackPath(stand, centerZ) {
   return [V(sx, centerZ), V(sx, TW_Z + 1.7), V(sx + 0.45, TW_Z + 0.4), V(sx + 1.6, TW_Z)];
 }
 
+const HOLD_X = RW_X0 + 1.2; // departures wait here, short of the runway
+const EXIT_X = RW_X1 - 1.2;
+const PAD_R = (TW_Z - RW_Z) / 2;
+const PAD_Z = (TW_Z + RW_Z) / 2;
+
+// From the end of pushback along the taxiway to the holding point.
 export function taxiOutPath(stand) {
   const sx = STANDS[stand];
-  const r = (TW_Z - RW_Z) / 2;
-  const cz = (TW_Z + RW_Z) / 2;
-  const cx = RW_X0 + 1.2;
-  const pts = [V(sx + 1.6, TW_Z), V(sx + 0.6, TW_Z), V(cx, TW_Z)];
+  return [V(sx + 1.6, TW_Z), V(sx + 0.6, TW_Z), V(HOLD_X, TW_Z)];
+}
+
+// Round the turn pad onto the runway, lined up for take-off.
+export function lineupPath() {
+  const pts = [V(HOLD_X + 0.6, TW_Z), V(HOLD_X, TW_Z)];
   for (let k = 1; k <= 5; k++) {
     const a = Math.PI / 2 + (k / 6) * Math.PI;
-    pts.push(V(cx + Math.cos(a) * r, cz + Math.sin(a) * r));
+    pts.push(V(HOLD_X + Math.cos(a) * PAD_R, PAD_Z + Math.sin(a) * PAD_R));
   }
-  pts.push(V(cx, RW_Z), V(cx + 0.8, RW_Z));
+  pts.push(V(HOLD_X, RW_Z), V(HOLD_X + 0.8, RW_Z));
   return pts;
 }
 
-export const TAKEOFF_START = RW_X0 + 2.0;
+export const TAKEOFF_START = HOLD_X + 0.8;
 export const TOUCHDOWN_X = RW_X0 + 4.2;
 export const ROLLOUT_X = RW_X1 - 2.8;
 
-export function taxiInPath(stand, centerZ) {
-  const sx = STANDS[stand];
-  const r = (TW_Z - RW_Z) / 2;
-  const cz = (TW_Z + RW_Z) / 2;
-  const cx = RW_X1 - 1.2;
-  const pts = [V(ROLLOUT_X, RW_Z), V(cx, RW_Z)];
+// Off the runway at the far end, round the pad back to the taxiway.
+export function exitPath() {
+  const pts = [V(ROLLOUT_X, RW_Z), V(EXIT_X, RW_Z)];
   for (let k = 1; k <= 5; k++) {
     const a = -Math.PI / 2 + (k / 6) * Math.PI;
-    pts.push(V(cx + Math.cos(a) * r, cz + Math.sin(a) * r));
+    pts.push(V(EXIT_X + Math.cos(a) * PAD_R, PAD_Z + Math.sin(a) * PAD_R));
   }
-  pts.push(V(cx, TW_Z), V(sx + 1.8, TW_Z), V(sx + 0.55, TW_Z + 0.5), V(sx, TW_Z + 1.8), V(sx, centerZ));
+  pts.push(V(EXIT_X, TW_Z), V(EXIT_X - 0.6, TW_Z));
   return pts;
+}
+
+export function taxiInPath(stand, centerZ) {
+  const sx = STANDS[stand];
+  return [V(EXIT_X - 0.6, TW_Z), V(sx + 1.8, TW_Z), V(sx + 0.55, TW_Z + 0.5), V(sx, TW_Z + 1.8), V(sx, centerZ)];
 }
 
 // ---------- Textures ----------
@@ -331,10 +341,6 @@ function pavement(group, lights) {
   group.add(apron);
 
   // Taxiways: every route the planes drive, paved and lined.
-  const routes = [];
-  STANDS.forEach((_, i) => {
-    routes.push(smoothPath(pushbackPath(i, 1.6)), smoothPath(taxiOutPath(i)), smoothPath(taxiInPath(i, 1.6)));
-  });
   const yellowLines = [];
   const pave = (curve, width, line = true) => {
     const pts = curve.getSpacedPoints(Math.ceil(curve.getLength() / 0.2));
@@ -346,8 +352,8 @@ function pavement(group, lights) {
   };
   // Main taxiway and the two runway turn pads.
   const main = pave(smoothPath([V(RW_X0 + 1.2, TW_Z), V(RW_X1 - 1.2, TW_Z)]), 0.95);
-  const outPad = pave(smoothPath(taxiOutPath(0).slice(2)), 1.0);
-  const inPad = pave(smoothPath(taxiInPath(0, 1.6).slice(0, 8)), 1.0);
+  const outPad = pave(smoothPath(lineupPath().slice(1)), 1.0);
+  const inPad = pave(smoothPath(exitPath()), 1.0);
   for (let i = 0; i < STANDS.length; i++) {
     const lead = smoothPath(taxiInPath(i, 1.6).slice(-4));
     const pts = lead.getSpacedPoints(40);
