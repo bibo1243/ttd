@@ -100,6 +100,8 @@ class Batch {
 class Batcher {
   constructor() {
     this.parts = [];
+    this.dormant = new Set();
+    this.frame = 0;
     this.batches = new Map(); // key -> [Batch]
     this.root = new THREE.Group();
     this.root.name = 'batched-parts';
@@ -144,7 +146,34 @@ class Batcher {
     return false;
   }
 
+  // Parts of things taken out of the scene for good (sold trains, despawned
+  // cars) would pile up; every so often move detached parts aside, freeing
+  // their slots, and bring back any that were attached again.
+  #sweep() {
+    const rooted = (o) => {
+      while (o.parent) o = o.parent;
+      return o === this.scene;
+    };
+    const active = [];
+    for (const part of this.parts) {
+      if (rooted(part)) active.push(part);
+      else {
+        if (part.slot) part.slot.batch.mesh.deleteInstance(part.slot.id);
+        part.slot = null;
+        this.dormant.add(part);
+      }
+    }
+    for (const part of this.dormant) {
+      if (rooted(part)) {
+        this.dormant.delete(part);
+        active.push(part);
+      }
+    }
+    this.parts = active;
+  }
+
   sync() {
+    if (++this.frame % 120 === 0) this.#sweep();
     for (const part of this.parts) {
       const shown = this.#shown(part);
       let slot = part.slot;

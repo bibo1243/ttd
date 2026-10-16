@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { sliceForPlanet } from './planet.js';
+import { bakeStatic } from './bake.js';
 
 // Station designs. Every platform's track-side edge sits 0.45 from the rail
 // centre; x grows outward from the rails, z runs along the track.
@@ -444,6 +445,7 @@ export function makeStationModel(style, color, name) {
       o.receiveShadow = true;
     }
   });
+  bakeStatic(g);
   return { group: g, blocks };
 }
 

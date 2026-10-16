@@ -3,6 +3,7 @@ import { Carriage, Locomotive } from './steam.js';
 import { BulletCar, TramCar } from './modern.js';
 import { makeDriver } from './robots.js';
 import { Path } from './network.js';
+import { bakeStatic, heldObjects } from './bake.js';
 
 export const TRAIN_TYPES = {
   steam: {
@@ -96,6 +97,11 @@ export class Train {
     for (const v of this.vehicles) this.scene.remove(v.group);
     this.vehicles = [this.head, ...this.mids, ...(this.tail ? [this.tail] : [])];
     for (const v of this.vehicles) {
+      // Merge each car's static parts; wheels, rods and doors keep moving.
+      if (!v.baked) {
+        bakeStatic(v.group, { anchors: [v.group, v.body], keep: heldObjects(v, [v.group, v.body]), batchKept: true });
+        v.baked = true;
+      }
       v.group.visible = !!this.path;
       this.scene.add(v.group);
     }

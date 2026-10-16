@@ -581,6 +581,21 @@ export function buildHouse(seed) {
 
   const body = k.build(new THREE.Group());
   group.add(body);
+  // Meshes wholly inside the walls (furniture, wallpaper, lamps) only show
+  // through the windows, so they can skip the shadow pass and be hidden
+  // when the camera is too far away to see in.
+  const inner = [];
+  const box = new THREE.Box3();
+  for (const m of body.children) {
+    box.setFromBufferAttribute(m.geometry.attributes.position);
+    const inside =
+      box.min.x > -W / 2 + T - 0.01 && box.max.x < W / 2 - T + 0.01 && box.min.z > -D / 2 + T - 0.01 && box.max.z < D / 2 - T + 0.01 &&
+      box.min.y > FLOOR - 0.005 && box.max.y < FLOOR + H;
+    if (inside && !m.material.transparent) {
+      m.castShadow = false;
+      inner.push(m);
+    }
+  }
 
   // ---------- Roof (its own group so it can lift off for a peek) ----------
   const roofGroup = new THREE.Group();
@@ -654,7 +669,7 @@ export function buildHouse(seed) {
   door.add(leaf);
   group.add(door);
 
-  return { group, roof: roofGroup, door, leaf };
+  return { group, roof: roofGroup, door, leaf, inner };
 }
 
 // Places inside the house where a resident can spend time, in house-local

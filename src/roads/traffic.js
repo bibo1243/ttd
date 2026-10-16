@@ -1,3 +1,4 @@
+import { toBatched } from '../bake.js';
 import * as THREE from 'three';
 import { VEHICLE_MODELS, buildVehicle } from '../vehicles/models.js';
 import { animateRiders, crewVehicle, makeRider, seatRider } from '../vehicles/crew.js';
@@ -50,6 +51,9 @@ export class Traffic {
     const lanes = this.net.lanes.filter((l) => l.length > 1.2);
     if (!lanes.length) return null;
     const v = buildVehicle(type.model, type.color ?? undefined, { route: String(this.buses.length + 1) });
+    // Turning wheels can't be merged into the body; draw them in shared
+    // batches with every other vehicle's wheels instead.
+    for (const w of v.wheels ?? []) toBatched(w.spin ?? w.obj);
     v.id = vid++;
     v.type = type.key;
     v.maxSpeed = VEHICLE_MODELS[type.model].speed * between(0.88, 1.08);

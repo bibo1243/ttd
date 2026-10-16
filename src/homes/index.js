@@ -11,6 +11,7 @@ import { buildHouse, setHomesNight, bulbMaterial, W, D, SPOTS, ENTRY, THRESHOLD,
 
 const LIGHTS = 4; // own warm room lights, when the game has no lamp system
 const PEEK_DISTANCE = 6.5; // camera closer than this lifts the roof
+const SEE_IN = 16; // farther than this the rooms are too small to see into
 const BLOCK = 0.16; // how far outside the walls strolling robots are kept
 
 const _v = new THREE.Vector3();
@@ -23,6 +24,8 @@ class Home {
     this.group = built.group;
     this.roof = built.roof;
     this.leaf = built.leaf;
+    this.inner = built.inner;
+    this.innerShown = true;
     this.group.position.set(x, 0, z);
     this.group.rotation.y = ry;
     this.group.updateMatrixWorld(true);
@@ -330,7 +333,13 @@ export class HomeSystem {
     for (const h of this.homes) {
       if (h.removed) continue;
       _v.set(h.prop.x, 0.6, h.prop.z);
-      const near = camera.position.distanceTo(_v) < this.peekDistance;
+      const dist = camera.position.distanceTo(_v);
+      const near = dist < this.peekDistance;
+      const seeIn = dist < SEE_IN;
+      if (seeIn !== h.innerShown) {
+        h.innerShown = seeIn;
+        for (const m of h.inner) m.visible = seeIn;
+      }
       // The roof pops up and away rather than hovering overhead.
       h.lift += ((near ? 1 : 0) - h.lift) * Math.min(1, dt * 7);
       if (Math.abs(h.lift) < 1e-3) h.lift = 0;
