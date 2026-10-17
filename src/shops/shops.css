@@ -1,0 +1,36 @@
+/* Shop builder and shop info card (shops module). */
+#shopCard {
+  padding: 12px 14px; border-radius: 16px;
+  background: var(--panel); backdrop-filter: blur(8px);
+  box-shadow: 0 6px 24px rgba(40, 70, 90, 0.18);
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 58vh; overflow-y: auto;
+}
+#shopCard[hidden] { display: none; }
+#shopCard .sc-title { font-weight: 700; font-size: 15px; }
+#shopCard .sc-info { font-size: 13px; line-height: 1.55; color: #555a66; }
+#shopCard .sc-info b { color: #e08a1e; }
+#shopCard .bad { color: #d9483b; font-weight: 600; }
+#shopCard .sc-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+#shopCard .sc-actions button { padding: 6px 10px; font-size: 13px; }
+.shop-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.shop-grid button.shop-pick {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 7px 4px; background: #f4f6f8; border-radius: 12px;
+}
+.shop-grid button.shop-pick:hover { background: #e6eef5; }
+.shop-pick i { font-style: normal; font-size: 22px; line-height: 1.2; }
+.shop-pick b { color: var(--ink) !important; font-size: 13px; }
+.shop-pick small { font-size: 12px; letter-spacing: 1px; }
+.shop-pick em { font-style: normal; font-size: 11px; color: #e08a1e; font-weight: 700; }
+.shop-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.shop-status { font-weight: 700; }
+.shop-status.ok { color: #2e9a5a; }
+.shop-status.bad { color: #d9483b; }
+#shopCard .bar { height: 6px; border-radius: 3px; background: #e6eaee; overflow: hidden; margin: 4px 0 6px; }
+#shopCard .bar i { display: block; height: 100%; background: linear-gradient(90deg, #f2c14e, #e08a1e); border-radius: 3px; }
+#shopCard .goods { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+#shopCard .goods > div { display: flex; flex-direction: column; gap: 3px; }
+#shopCard .goods > div > small { color: var(--muted); font-size: 11px; }
+#shopCard .good { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; background: #f6f8fa; border-radius: 8px; padding: 3px 7px; }
+#shopCard .good small { font-size: 11px; color: #4a90c8; }
