@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { JUNCTION_R, Polyline, ROAD_HALF, WALK, crossings } from './net.js';
+import { Polyline, crossings } from './net.js';
+import { buildSignals } from './signals.js';
 
-// Builds the look of the road network: asphalt with a fine grain, double
-// yellow centre lines, white edge lines, stop lines and zebra crossings at
-// junctions, paved sidewalks with kerbs, turning circles at dead ends and
-// street lamps.
+// Builds the look of the road network for each road type: asphalt with a
+// fine grain (pale concrete for lanes), double yellow centre lines or a
+// planted median with street trees, white edge and lane lines, stop lines
+// and zebra crossings at junctions, paved sidewalks with kerbs, turning
+// circles at dead ends, street lamps and traffic lights.
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -47,8 +49,30 @@ const paverTex = typeof document !== 'undefined'
   })
   : null;
 
+// Pale poured concrete for lanes: two slabs with a seam down the middle and
+// a joint every metre.
+const concreteTex = typeof document !== 'undefined'
+  ? canvasTex(256, (g, n) => {
+    g.fillStyle = '#a19c92';
+    g.fillRect(0, 0, n, n);
+    for (let i = 0; i < 1800; i++) {
+      const v = 135 + Math.floor(Math.random() * 55);
+      g.fillStyle = `rgba(${v},${v - 4},${v - 12},${0.2 + Math.random() * 0.3})`;
+      const s = 1 + Math.random() * 2;
+      g.fillRect(Math.random() * n, Math.random() * n, s, s);
+    }
+    g.fillStyle = 'rgba(110,104,96,0.55)';
+    g.fillRect(0, 0, 3, n);
+    g.fillRect(0, 0, n, 2);
+  })
+  : null;
+
 export const ROAD_MATS = {
   asphalt: new THREE.MeshStandardMaterial({ color: 0xffffff, map: asphaltTex, roughness: 0.93, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+  concrete: new THREE.MeshStandardMaterial({ color: 0xd2cdc4, map: concreteTex, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+  grass: new THREE.MeshStandardMaterial({ color: 0x86b86a, roughness: 0.95 }),
+  trunk: new THREE.MeshStandardMaterial({ color: 0x8a6142, roughness: 0.8 }),
+  crown: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, flatShading: true }),
   disk: new THREE.MeshStandardMaterial({ color: 0xffffff, map: asphaltTex, roughness: 0.93, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
   yellow: new THREE.MeshStandardMaterial({ color: 0xf2c33a, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }),
   white: new THREE.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }),
@@ -59,7 +83,9 @@ export const ROAD_MATS = {
 };
 
 // A flat strip from offset o0 to o1 (to the right of travel) along pts,
-// with uv in world units (u along, v across).
+// with uv in world units (u along, v across). Wide strips get extra
+// vertices across so they follow the planet's curve instead of sinking
+// into the ground in the middle.
 function strip(pts, o0, o1, y, uScale = 1) {
   const line = new Polyline(pts);
   const pos = [];
@@ -67,13 +93,21 @@ function strip(pts, o0, o1, y, uScale = 1) {
   const idx = [];
   const t = new THREE.Vector3();
   const side = new THREE.Vector3();
+  const k = Math.max(1, Math.ceil((o1 - o0) / 0.45));
+  const row = k + 1;
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i];
     t.subVectors(pts[Math.min(pts.length - 1, i + 1)], pts[Math.max(0, i - 1)]).normalize();
     side.crossVectors(t, UP).normalize();
-    pos.push(p.x + side.x * o0, y, p.z + side.z * o0, p.x + side.x * o1, y, p.z + side.z * o1);
-    uv.push(line.cum[i] * uScale, o0 * uScale, line.cum[i] * uScale, o1 * uScale);
-    if (i < pts.length - 1) idx.push(i * 2, i * 2 + 2, i * 2 + 1, i * 2 + 1, i * 2 + 2, i * 2 + 3);
+    for (let j = 0; j <= k; j++) {
+      const o = o0 + ((o1 - o0) * j) / k;
+      pos.push(p.x + side.x * o, y, p.z + side.z * o);
+      uv.push(line.cum[i] * uScale, o * uScale);
+      if (i < pts.length - 1 && j < k) {
+        const a = i * row + j;
+        idx.push(a, a + row, a + 1, a + 1, a + row, a + row + 1);
+      }
+    }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -122,8 +156,9 @@ const flipStripWinding = (g) => {
 function trims(seg) {
   const at = (n) => {
     if (n.segs.length <= 1 || n.smooth) return { road: 0, mark: 0, walk: 0, junction: false, corner: false };
-    if (n.junction) return { road: JUNCTION_R * 0.92, mark: JUNCTION_R + 0.62, walk: JUNCTION_R + 0.02, junction: true };
-    return { road: 0, mark: ROAD_HALF, walk: ROAD_HALF + 0.05, junction: false, corner: true };
+    const R = n.radius;
+    if (n.junction) return { road: R * 0.92, mark: R + 0.62, walk: R + 0.02, junction: true };
+    return { road: 0, mark: n.half, walk: n.half + 0.05, junction: false, corner: true };
   };
   return [at(seg.a), at(seg.b)];
 }
@@ -135,108 +170,175 @@ function cut(line, a, b) {
 }
 
 // The stretches of [a, len - b] left after taking out the gaps.
-function pieces(line, a, b, gaps) {
-  let runs = [[Math.min(a, line.length / 2 - 0.01), Math.max(Math.min(a, line.length / 2 - 0.01) + 0.02, line.length - b)]];
+function runs(line, a, b, gaps) {
+  const s0 = Math.min(a, line.length / 2 - 0.01);
+  let out = [[s0, Math.max(s0 + 0.02, line.length - b)]];
   for (const [g0, g1] of gaps) {
-    runs = runs.flatMap(([r0, r1]) => {
+    out = out.flatMap(([r0, r1]) => {
       if (g1 <= r0 || g0 >= r1) return [[r0, r1]];
-      const out = [];
-      if (g0 - r0 > 0.05) out.push([r0, g0]);
-      if (r1 - g1 > 0.05) out.push([g1, r1]);
-      return out;
+      const keep = [];
+      if (g0 - r0 > 0.05) keep.push([r0, g0]);
+      if (r1 - g1 > 0.05) keep.push([g1, r1]);
+      return keep;
     });
   }
-  return runs.map(([r0, r1]) => line.slice(r0, r1));
+  return out;
+}
+
+function pieces(line, a, b, gaps) {
+  return runs(line, a, b, gaps).map(([r0, r1]) => line.slice(r0, r1));
+}
+
+// A flat disc (in the xy plane, like CircleGeometry) with rings of
+// vertices, so even a wide junction follows the planet's curve.
+const disc = (r, segments) => new THREE.RingGeometry(0, r, segments, Math.max(1, Math.ceil(r / 0.4)));
+
+// A thin painted line at offset o along pts.
+const paint = (pts, o, w = 0.026) => flipStripWinding(strip(pts, o - w / 2, o + w / 2, 0.016));
+
+// A vertical cap across the end of a raised strip from offset o0 to o1.
+function cap(line, s, o0, o1, h, face) {
+  const p = line.pointAt(s);
+  const t = line.tangentAt(Math.min(line.length - 0.01, Math.max(0.01, s)));
+  const side = new THREE.Vector3().crossVectors(t, UP).normalize();
+  const g = new THREE.PlaneGeometry(o1 - o0, h);
+  g.rotateY(Math.atan2(t.x * face, t.z * face));
+  const c = p.clone().addScaledVector(side, (o0 + o1) / 2);
+  g.translate(c.x, h / 2, c.z);
+  return g;
 }
 
 // stops: bus stop positions, kept clear of lamps.
 // rails: polylines of railway track; sidewalks and lamps make way for
 // level crossings.
 export function buildRoadMeshes(net, rails = [], stops = []) {
-  const geos = { asphalt: [], disk: [], yellow: [], white: [], walk: [], kerb: [] };
+  const geos = { asphalt: [], concrete: [], disk: [], yellow: [], white: [], walk: [], kerb: [], grass: [] };
   const lamps = [];
+  const trees = [];
+  const ends = [...net.nodes].filter((n) => n.segs.length !== 2 || !n.smooth);
 
   for (const seg of net.segs) {
+    const T = seg.type;
+    const H = T.half;
+    const W = T.walk;
     const [ta, tb] = trims(seg);
     const line = seg.line;
     const gaps = rails.flatMap((r) => crossings(line, r)).map((c) => [c.ta - 1.0, c.ta + 1.0]);
-    geos.asphalt.push(flipStripWinding(strip(cut(line, ta.road, tb.road), -ROAD_HALF, ROAD_HALF, 0.012)));
+    geos[T.kerb ? 'asphalt' : 'concrete'].push(flipStripWinding(strip(cut(line, ta.road, tb.road), -H, H, 0.012)));
     const marks = cut(line, ta.mark, tb.mark);
-    for (const o of [-0.035, 0.035]) geos.yellow.push(flipStripWinding(strip(marks, o - 0.013, o + 0.013, 0.016)));
-    for (const o of [-(ROAD_HALF - 0.07), ROAD_HALF - 0.07]) geos.white.push(flipStripWinding(strip(marks, o - 0.013, o + 0.013, 0.016)));
-    // Sidewalks: paved top and kerb faces on both sides.
+    if (T.median) {
+      // Raised planted median with kerbs, and a yellow line along each side.
+      const m = T.median;
+      for (const [r0, r1] of runs(line, ta.mark + 0.12, tb.mark + 0.12, gaps.map(([g0, g1]) => [g0 - 0.3, g1 + 0.3]))) {
+        const mid = line.slice(r0, r1);
+        if (new Polyline(mid).length < 0.4) continue;
+        geos.grass.push(flipStripWinding(strip(mid, -m, m, 0.07, 1)));
+        geos.kerb.push(wall(mid, -m, 0, 0.07, -1), wall(mid, m, 0, 0.07, 1));
+        geos.kerb.push(cap(line, r0, -m, m, 0.07, -1), cap(line, r1, -m, m, 0.07, 1));
+        for (let s = r0 + 0.55; s < r1 - 0.4; s += 1.55) {
+          const p = line.pointAt(s);
+          if (ends.some((n) => n.pos.distanceTo(p) < n.radius + 0.6)) continue;
+          trees.push(p);
+        }
+      }
+      for (const o of [-(m + 0.06), m + 0.06]) geos.yellow.push(paint(marks, o));
+      // Dashed lane dividers.
+      const div = (T.lanes[0] + T.lanes[1]) / 2;
+      const line2 = new Polyline(marks);
+      for (let s = 0.1; s < line2.length - 0.1; s += 0.62) {
+        const dash = line2.slice(s, Math.min(line2.length - 0.05, s + 0.32));
+        for (const o of [-div, div]) geos.white.push(paint(dash, o, 0.024));
+      }
+    } else if (T.kerb) {
+      for (const o of [-0.035, 0.035]) geos.yellow.push(paint(marks, o));
+    }
+    for (const o of [-(H - 0.07), H - 0.07]) geos.white.push(paint(marks, o, T.kerb ? 0.026 : 0.02));
+    // Sidewalks: paved top and kerb faces on both sides; lanes get a flush
+    // strip of paving instead.
     for (const walk of pieces(line, ta.walk, tb.walk, gaps)) {
       if (walk.length < 2) continue;
       for (const side of [-1, 1]) {
-        const o0 = side * ROAD_HALF;
-        const o1 = side * (ROAD_HALF + WALK);
+        const o0 = side * H;
+        const o1 = side * (H + W);
+        if (!T.kerb) {
+          geos.walk.push(flipStripWinding(strip(walk, Math.min(o0, o1), Math.max(o0, o1), 0.018, 1 / 0.26)));
+          continue;
+        }
         geos.walk.push(flipStripWinding(strip(walk, Math.min(o0, o1), Math.max(o0, o1), 0.05, 1 / 0.26)));
         geos.kerb.push(wall(walk, o0, 0, 0.05, -side));
         geos.kerb.push(wall(walk, o1, 0, 0.05, side));
       }
     }
-    // Junction ends: stop line across the incoming lane and a zebra crossing.
-    for (const [end, t] of [[0, ta], [1, tb]]) {
+    // Junction ends: stop line across the incoming lanes and a zebra crossing.
+    for (const [end, t, node] of [[0, ta, seg.a], [1, tb, seg.b]]) {
       if (!t.junction) continue;
+      const R = node.radius;
       const s = end === 0 ? 0 : line.length;
       const dir = end === 0 ? 1 : -1; // pointing away from the node
       const at = (d) => line.pointAt(s + dir * d);
       const tan = (d) => line.tangentAt(Math.min(line.length - 0.01, Math.max(0.01, s + dir * d))).multiplyScalar(dir);
-      // Zebra: stripes across the road between JUNCTION_R+0.05 and +0.5.
-      const z0 = JUNCTION_R + 0.06;
-      const z1 = JUNCTION_R + 0.5;
+      // Zebra: stripes across the road between R+0.06 and R+0.5.
+      const z0 = R + 0.06;
+      const z1 = R + 0.5;
       const c = at((z0 + z1) / 2);
       const f = tan((z0 + z1) / 2);
       const side = new THREE.Vector3().crossVectors(f, UP).normalize();
-      for (let x = -ROAD_HALF + 0.1; x <= ROAD_HALF - 0.08; x += 0.17) {
+      for (let x = -H + 0.1; x <= H - 0.08; x += 0.17) {
         const g = new THREE.PlaneGeometry(0.085, z1 - z0).rotateX(-Math.PI / 2);
         g.rotateY(Math.atan2(f.x, f.z));
         g.translate(c.x + side.x * x, 0.016, c.z + side.z * x);
         geos.white.push(g);
       }
-      // Stop line on the lane coming toward the node (its right side when
-      // facing the node, i.e. the left side of `f`).
-      const sl = at(JUNCTION_R + 0.62);
-      const g = new THREE.PlaneGeometry(ROAD_HALF - 0.05, 0.05).rotateX(-Math.PI / 2);
+      // Stop line across the lanes coming toward the node (their right side
+      // when facing the node, i.e. the left side of `f`).
+      const inner = T.median ? T.median + 0.1 : 0.06;
+      const w = H - 0.05 - inner;
+      const sl = at(R + 0.62);
+      const g = new THREE.PlaneGeometry(w, 0.05, Math.ceil(w / 0.4), 1).rotateX(-Math.PI / 2);
       g.rotateY(Math.atan2(f.x, f.z));
-      g.translate(sl.x - side.x * (ROAD_HALF / 2), 0.016, sl.z - side.z * (ROAD_HALF / 2));
+      g.translate(sl.x - side.x * (inner + w / 2), 0.016, sl.z - side.z * (inner + w / 2));
       geos.white.push(g);
     }
     // Street lamps on alternating sides.
-    const spacing = 4.2;
+    const spacing = T.median ? 3.6 : 4.2;
     let k = 0;
     for (let s = 1.6; s < line.length - 1.6; s += spacing, k++) {
       const p = line.pointAt(s);
-      if ([...net.nodes].some((n) => n.segs.length !== 2 && n.pos.distanceTo(p) < JUNCTION_R + 0.9)) continue;
+      if (ends.some((n) => n.segs.length !== 2 && n.pos.distanceTo(p) < n.radius + 0.9 + (n.junction ? 0.5 : 0))) continue;
       if (gaps.some(([g0, g1]) => s > g0 - 0.6 && s < g1 + 0.6)) continue;
       const t = line.tangentAt(s);
       const side = new THREE.Vector3().crossVectors(t, UP).normalize().multiplyScalar(k % 2 ? 1 : -1);
-      const at = p.clone().addScaledVector(side, ROAD_HALF + WALK);
+      const at = p.clone().addScaledVector(side, H + W);
       if (stops.some((q) => q.distanceTo(at) < 1.5)) continue;
-      lamps.push({ p: p.clone().addScaledVector(side, ROAD_HALF + WALK - 0.07), toward: side.clone().negate() });
+      lamps.push({ p: p.clone().addScaledVector(side, H + W - 0.07), toward: side.clone().negate() });
     }
   }
 
   for (const n of net.nodes) {
-    if (n.segs.length >= 3) geos.disk.push(new THREE.CircleGeometry(JUNCTION_R, 40).rotateX(-Math.PI / 2).translate(n.pos.x, 0.014, n.pos.z));
-    else if (n.segs.length === 2 && !n.smooth) geos.disk.push(new THREE.CircleGeometry(ROAD_HALF, 32).rotateX(-Math.PI / 2).translate(n.pos.x, 0.014, n.pos.z));
+    if (n.segs.length >= 3) geos.disk.push(disc(n.radius, 48).rotateX(-Math.PI / 2).translate(n.pos.x, 0.014, n.pos.z));
+    else if (n.segs.length === 2 && !n.smooth) geos.disk.push(disc(n.half, 32).rotateX(-Math.PI / 2).translate(n.pos.x, 0.014, n.pos.z));
     else if (n.segs.length === 1) {
       // Turning circle with a kerb ring that leaves the road's mouth open.
-      const R = 1.15;
-      geos.disk.push(new THREE.CircleGeometry(R, 40).rotateX(-Math.PI / 2).translate(n.pos.x, 0.014, n.pos.z));
+      const T = n.segs[0].type;
+      const R = T.half + 0.43;
+      geos.disk.push(disc(R, 40).rotateX(-Math.PI / 2).translate(n.pos.x, 0.014, n.pos.z));
       const d = n.segs[0].dirAt(n);
       const ang = Math.atan2(d.z, d.x);
-      const gap = Math.asin(Math.min(1, (ROAD_HALF + WALK) / R)) + 0.05;
+      const gap = Math.asin(Math.min(1, (T.half + T.walk) / (R + 0.05))) + 0.05;
       const start = ang + gap;
       const len = Math.PI * 2 - gap * 2;
+      const W = T.walk;
+      const top = T.kerb ? 0.05 : 0.018;
       // RingGeometry runs counter-clockwise in its own xy plane; rotating
       // onto the ground flips the sense of z, so mirror the start angle.
-      const ring = new THREE.RingGeometry(R, R + WALK, 40, 1, -start - len, len).rotateX(-Math.PI / 2).translate(n.pos.x, 0.05, n.pos.z);
+      const ring = new THREE.RingGeometry(R, R + W, 40, 1, -start - len, len).rotateX(-Math.PI / 2).translate(n.pos.x, top, n.pos.z);
       geos.walk.push(ring);
-      const outer = new THREE.CylinderGeometry(R + WALK, R + WALK, 0.05, 40, 1, true, Math.PI / 2 + start, len).translate(n.pos.x, 0.025, n.pos.z);
-      const inner = new THREE.CylinderGeometry(R, R, 0.05, 40, 1, true, Math.PI / 2 + start, len).translate(n.pos.x, 0.025, n.pos.z);
-      flipStripWinding(inner);
-      geos.kerb.push(outer.toNonIndexed().setIndex(null), inner);
+      if (T.kerb) {
+        const outer = new THREE.CylinderGeometry(R + W, R + W, 0.05, 40, 1, true, Math.PI / 2 + start, len).translate(n.pos.x, 0.025, n.pos.z);
+        const inner = new THREE.CylinderGeometry(R, R, 0.05, 40, 1, true, Math.PI / 2 + start, len).translate(n.pos.x, 0.025, n.pos.z);
+        flipStripWinding(inner);
+        geos.kerb.push(outer.toNonIndexed().setIndex(null), inner);
+      }
     }
   }
 
@@ -252,12 +354,51 @@ export function buildRoadMeshes(net, rails = [], stops = []) {
     });
     const m = new THREE.Mesh(mergeGeometries(norm), ROAD_MATS[key]);
     m.receiveShadow = true;
-    m.castShadow = key === 'walk' || key === 'kerb';
+    m.castShadow = key === 'walk' || key === 'kerb' || key === 'grass';
     group.add(m);
   }
   if (lamps.length) group.add(...lampMeshes(lamps));
+  if (trees.length) group.add(...treeMeshes(trees));
+  const signals = buildSignals(net);
+  if (signals) {
+    group.add(...signals.meshes);
+    group.userData.signals = signals;
+  }
   return group;
 }
+
+// Street trees for the median: a slim trunk and a faceted round crown,
+// each a little different in size, lean and shade of green.
+function treeMeshes(spots) {
+  const trunk = new THREE.CylinderGeometry(0.022, 0.032, 0.42, 7).translate(0, 0.28, 0);
+  const crown = mergeGeometries([
+    new THREE.IcosahedronGeometry(0.2, 1).translate(0, 0.62, 0),
+    new THREE.IcosahedronGeometry(0.13, 1).translate(0.08, 0.78, 0.03),
+    new THREE.IcosahedronGeometry(0.12, 1).translate(-0.09, 0.72, -0.04),
+  ].map((g) => (g.index ? g.toNonIndexed() : g)));
+  const shades = [0x5fae5a, 0x6dbb5e, 0x4f9e57, 0x7cc067, 0x5aa86a].map((c) => new THREE.Color(c));
+  const out = [];
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const e = new THREE.Euler();
+  const sc = new THREE.Vector3();
+  const looks = spots.map((p, i) => ({ p, yaw: Math.random() * Math.PI * 2, tilt: (Math.random() - 0.5) * 0.12, s: 0.85 + Math.random() * 0.35, shade: shades[i % shades.length] }));
+  for (const [geo, mat] of [[trunk, ROAD_MATS.trunk], [crown, ROAD_MATS.crown]]) {
+    const inst = new THREE.InstancedMesh(geo, mat, looks.length);
+    looks.forEach((l, i) => {
+      q.setFromEuler(e.set(l.tilt, l.yaw, l.tilt * 0.5));
+      m.compose(tmpV.set(l.p.x, 0.07, l.p.z), q, sc.setScalar(l.s));
+      inst.setMatrixAt(i, m);
+      if (mat === ROAD_MATS.crown) inst.setColorAt(i, l.shade);
+    });
+    inst.castShadow = true;
+    inst.receiveShadow = true;
+    out.push(inst);
+  }
+  return out;
+}
+
+const tmpV = new THREE.Vector3();
 
 // Street lamps: tapered pole, curved arm, lamp head and glowing bulb.
 function lampMeshes(lamps) {

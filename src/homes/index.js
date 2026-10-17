@@ -272,7 +272,10 @@ export class HomeSystem {
       const pts = [];
       for (const fx of [-1, 0, 1]) for (const fz of [-1, 0, 1]) pts.push(h.world((fx * W) / 2, 0, (fz * D) / 2));
       pts.push(h.world(DOORSTEP.x, 0, DOORSTEP.z));
-      const onRoad = roads && [...(roads.segs ?? [])].length > 0 && pts.some((p) => (roads.nearestSeg(p.x, p.z)?.dist ?? Infinity) < ROAD_CLEAR);
+      const onRoad = roads && [...(roads.segs ?? [])].length > 0 && pts.some((p) => {
+        const ns = roads.nearestSeg(p.x, p.z);
+        return ns && ns.dist - (ns.wide ?? 0) < ROAD_CLEAR;
+      });
       const blocked = blockers.some((b) => pts.some((p) => b.hit(p.x, p.z, 0.2)));
       if (onRoad || blocked) this.#demolish(h);
     }

@@ -1,15 +1,38 @@
 import * as THREE from 'three';
 
 // The road network: nodes joined by segments, each segment a dense
-// centreline polyline. Every segment carries one lane each way (traffic
-// drives on the right); vehicles move along lanes and through connectors
-// that join an incoming lane to an outgoing one across a node.
+// centreline polyline of one road type. A segment carries one or more lanes
+// each way (traffic drives on the right); vehicles move along lanes and
+// through connectors that join an incoming lane to an outgoing one across
+// a node.
 
-export const ROAD_HALF = 0.72; // half the asphalt width
+export const ROAD_HALF = 0.72; // half the asphalt width of a normal road
 export const LANE_OFF = 0.36; // lane centre from the road centre
 export const WALK = 0.26; // sidewalk width
-export const JUNCTION_R = 1.05; // radius of the open area at a junction
+export const JUNCTION_R = 1.05; // radius of the open area at a normal junction
 export const STOP_BACK = 0.75; // stop line distance before the junction area
+
+// Road types the player can lay.
+//   half    half the asphalt width
+//   walk    sidewalk width (flush paving for lanes without kerbs)
+//   lanes   lane centres from the road centre, inner to kerb side
+//   pace    how much faster than usual vehicles drive here
+//   limit   speed limit (world units per second)
+//   kmh     the limit as shown to the player
+//   cost    price per metre
+export const ROAD_TYPES = {
+  lane: { key: 'lane', label: '小巷', icon: '🏘️', half: 0.56, walk: 0.16, lanes: [0.29], lanesText: '單車道雙向', pace: 0.62, limit: 1.45, kmh: 30, cost: 6, kerb: false, note: '窄窄的巷弄，沒有分向線，會車時慢慢錯身。' },
+  road: { key: 'road', label: '一般道路', icon: '🛣️', half: ROAD_HALF, walk: WALK, lanes: [LANE_OFF], lanesText: '雙向 2 線', pace: 1, limit: 2.6, kmh: 50, cost: 10, kerb: true, note: '雙向各一線，雙黃線分隔。' },
+  avenue: { key: 'avenue', label: '大道', icon: '🌳', half: 1.62, walk: 0.3, lanes: [0.52, 1.24], lanesText: '雙向 4 線', median: 0.16, pace: 1.22, limit: 3.3, kmh: 70, cost: 28, kerb: true, note: '雙向各兩線，中央分隔島種行道樹，可以超車。' },
+};
+export const DEFAULT_TYPE = ROAD_TYPES.road;
+export const roadType = (key) => ROAD_TYPES[key] ?? DEFAULT_TYPE;
+// Kerb to kerb plus sidewalks, from the centre line.
+export const outerHalf = (type) => type.half + type.walk;
+// Closest the centre lines of two separate roads may run.
+export const roadGap = (a, b) => outerHalf(a) + outerHalf(b) + 0.09;
+// Closest two junctions may be along roads of these types.
+export const junctionGap = (a, b) => 2.8 + 2 * Math.max(0, Math.max(a.half, b.half) - ROAD_HALF);
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -111,28 +134,45 @@ export class RNode {
     return this.segs.length >= 3;
   }
 
-  // Two segments meeting smoothly: the road just carries on.
+  // Two segments of the same type meeting smoothly: the road just carries on.
   get smooth() {
     if (this.segs.length !== 2) return false;
     const [a, b] = this.segs;
-    return a.dirAt(this).dot(b.dirAt(this)) < -0.95;
+    return a.type === b.type && a.dirAt(this).dot(b.dirAt(this)) < -0.95;
+  }
+
+  // Half width of the widest road meeting here.
+  get half() {
+    return this.segs.reduce((m, s) => Math.max(m, s.type.half), 0) || ROAD_HALF;
+  }
+
+  // Radius of the open asphalt area at a junction (or a corner).
+  get radius() {
+    return this.junction ? this.half + (JUNCTION_R - ROAD_HALF) : this.half;
   }
 
   // How far lanes stop short of this node.
   get trim() {
     if (this.segs.length <= 1 || this.smooth) return 0;
-    return this.junction ? JUNCTION_R + STOP_BACK : JUNCTION_R * 0.75;
+    return this.junction ? this.radius + STOP_BACK : (this.half + (JUNCTION_R - ROAD_HALF)) * 0.75;
   }
 }
 
 export class RSeg {
-  constructor(a, b, pts, cost = 0) {
+  constructor(a, b, pts, cost = 0, type = DEFAULT_TYPE) {
     this.id = ids++;
     this.a = a;
     this.b = b;
     this.line = new Polyline(pts.map((p) => p.clone().setY(0)));
     this.cost = cost;
+    this.type = type;
     this.lanes = {};
+  }
+
+  // The kerb-side lane running in direction dir (bus stops use it).
+  kerbLane(dir) {
+    const l = this.lanes[dir];
+    return l?.[l.length - 1] ?? null;
   }
 
   get pts() {
@@ -157,16 +197,20 @@ export class RSeg {
   }
 }
 
-// One direction of travel along a segment.
+// One lane of one direction of travel along a segment; idx 0 is the inner
+// (overtaking) lane, the last one runs along the kerb.
 export class Lane {
-  constructor(seg, dir) {
+  constructor(seg, dir, idx = 0) {
     this.seg = seg;
     this.dir = dir;
+    this.idx = idx;
+    this.offset = seg.type.lanes[idx];
+    this.count = seg.type.lanes.length;
     this.from = dir > 0 ? seg.a : seg.b;
     this.to = dir > 0 ? seg.b : seg.a;
-    this.key = `${seg.id}${dir > 0 ? '+' : '-'}`;
+    this.key = `${seg.id}${dir > 0 ? '+' : '-'}${idx}`;
     const centre = dir > 0 ? seg.pts : [...seg.pts].reverse();
-    const full = new Polyline(offsetLine(centre, LANE_OFF));
+    const full = new Polyline(offsetLine(centre, this.offset));
     this.t0 = Math.min(this.from.trim, full.length * 0.45);
     this.t1 = Math.max(this.t0 + 0.05, full.length - Math.min(this.to.trim, full.length * 0.45));
     this.path = new Polyline(full.slice(this.t0, this.t1));
@@ -175,6 +219,11 @@ export class Lane {
 
   get length() {
     return this.path.length;
+  }
+
+  // The lanes running the same way, this one included.
+  get siblings() {
+    return this.seg.lanes[this.dir];
   }
 
   // Lane distance for a distance s along the segment from node a.
@@ -199,8 +248,8 @@ export class RoadNet {
     return n;
   }
 
-  addSeg(a, b, pts, cost) {
-    const s = new RSeg(a, b, pts, cost);
+  addSeg(a, b, pts, cost, type) {
+    const s = new RSeg(a, b, pts, cost, type);
     a.segs.push(s);
     b.segs.push(s);
     this.segs.add(s);
@@ -223,13 +272,13 @@ export class RoadNet {
     const node = this.addNode(seg.line.pointAt(s));
     const left = seg.line.slice(0, s);
     const right = seg.line.slice(s, seg.length);
-    const { a, b, cost } = seg;
+    const { a, b, cost, type } = seg;
     this.removeSeg(seg);
     this.nodes.add(a);
     this.nodes.add(b);
     const k = s / seg.length;
-    const l = this.addSeg(a, node, left, cost * k);
-    const r = this.addSeg(node, b, right, cost * (1 - k));
+    const l = this.addSeg(a, node, left, cost * k, type);
+    const r = this.addSeg(node, b, right, cost * (1 - k), type);
     l.parent = r.parent = seg;
     return node;
   }
@@ -238,25 +287,95 @@ export class RoadNet {
   rebuild() {
     this.lanes = [];
     for (const s of this.segs) {
-      s.lanes = { 1: new Lane(s, 1), [-1]: new Lane(s, -1) };
-      this.lanes.push(s.lanes[1], s.lanes[-1]);
+      s.lanes = {};
+      for (const dir of [1, -1]) {
+        s.lanes[dir] = s.type.lanes.map((_, i) => new Lane(s, dir, i));
+        this.lanes.push(...s.lanes[dir]);
+      }
     }
     this.connectors.clear();
+    this.conflicts = new Map();
     this.version++;
   }
 
-  // Lanes a vehicle arriving on `lane` may continue on. U-turns only at
-  // dead ends.
-  exits(lane) {
+  // Lane groups (every lane of one direction of one segment) a vehicle
+  // arriving on `lane` may continue on. U-turns only at dead ends.
+  exitGroups(lane) {
     const n = lane.to;
     const out = [];
     for (const s of n.segs) {
-      const l = s.a === n ? s.lanes[1] : s.lanes[-1];
       if (s === lane.seg && n.segs.length > 1) continue;
       if (s.a === n && s.b === n) out.push(s.lanes[1], s.lanes[-1]);
-      else out.push(l);
+      else out.push(s.a === n ? s.lanes[1] : s.lanes[-1]);
     }
-    return out.filter(Boolean);
+    return out.filter((g) => g?.length);
+  }
+
+  // Every lane a vehicle arriving on `lane` may continue on.
+  exits(lane) {
+    return this.exitGroups(lane).flat();
+  }
+
+  // How a move from lane a onto lane b turns: -1 left, 0 straight, 1 right.
+  turn(a, b) {
+    if (a.seg === b.seg) return -1;
+    const t0 = a.path.tangentAt(a.length - 0.01);
+    const t1 = b.path.tangentAt(0.01);
+    // The right of travel is cross(t, up) = (-t.z, 0, t.x).
+    const r = -t0.z * t1.x + t0.x * t1.z;
+    return r > 0.45 ? 1 : r < -0.45 ? -1 : 0;
+  }
+
+  // The lane of group g to take after arriving on `from`. At junctions
+  // right turns keep to the kerb, left turns to the inside and straight on
+  // keeps its lane; round corners and dead ends every lane keeps its place,
+  // so their paths never cross.
+  pickLane(from, g) {
+    if (g.length === 1) return g[0];
+    if (from.to.junction) {
+      const t = this.turn(from, g[0]);
+      if (t > 0) return g[g.length - 1];
+      if (t < 0) return g[0];
+    }
+    if (from.count < g.length) return g[Math.random() < 0.5 ? 0 : g.length - 1];
+    return g[Math.min(g.length - 1, from.idx)];
+  }
+
+  // Does traffic arriving at node n need right of way to go through? Not
+  // where a road simply carries on.
+  guarded(n) {
+    return n.segs.length >= 1 && !n.smooth;
+  }
+
+  // The lane index on `lane`'s road to be in before moving onto `next`,
+  // or -1 when any will do.
+  wantIdx(lane, next) {
+    if (lane.count === 1 || !next || !lane.to.junction) return -1;
+    const t = this.turn(lane, next);
+    return t > 0 ? lane.count - 1 : t < 0 ? 0 : -1;
+  }
+
+  // Do two connectors through the same node pass close enough that
+  // vehicles on them could touch?
+  conflict(c1, c2) {
+    if (c1 === c2 || c1.from === c2.from) return false;
+    const key = c1.key < c2.key ? `${c1.key}|${c2.key}` : `${c2.key}|${c1.key}`;
+    let hit = this.conflicts.get(key);
+    if (hit !== undefined) return hit;
+    hit = c1.to === c2.to;
+    const A = c1.path.pts;
+    const B = c2.path.pts;
+    const clear = 0.64;
+    for (let i = 0; i < A.length && !hit; i++) {
+      for (let j = 0; j < B.length; j++) {
+        if ((A[i].x - B[j].x) ** 2 + (A[i].z - B[j].z) ** 2 < clear * clear) {
+          hit = true;
+          break;
+        }
+      }
+    }
+    this.conflicts.set(key, hit);
+    return hit;
   }
 
   // Smooth path through a node from the end of `a` to the start of `b`.
@@ -273,7 +392,7 @@ export class RoadNet {
     const k = uTurn ? 1.0 : Math.max(0.15, dist * 0.45);
     const curve = new THREE.CubicBezierCurve3(p0, p0.clone().addScaledVector(d0, k), p3.clone().addScaledVector(d3, -k), p3);
     const n = Math.max(6, Math.ceil(curve.getLength() / 0.12));
-    c = { path: new Polyline(curve.getSpacedPoints(n)), from: a, to: b, node: a.to, uTurn };
+    c = { key, path: new Polyline(curve.getSpacedPoints(n)), from: a, to: b, node: a.to, uTurn };
     this.connectors.set(key, c);
     return c;
   }
@@ -284,7 +403,12 @@ export class RoadNet {
       const r = s.line.nearest(x, z);
       if (!best || r.dist < best.dist) best = { seg: s, s: r.s, dist: r.dist };
     }
-    if (best) best.pos = best.seg.line.pointAt(best.s);
+    if (best) {
+      best.pos = best.seg.line.pointAt(best.s);
+      // How much wider than a normal road (with its sidewalks) this one is,
+      // for callers that keep a fixed distance from roads.
+      best.wide = outerHalf(best.seg.type) - (ROAD_HALF + WALK);
+    }
     return best;
   }
 
@@ -325,7 +449,7 @@ export class RoadNet {
       const l = open.shift();
       if (l === to) break;
       for (const x of this.exits(l)) {
-        const d = dist.get(l) + x.length + (x.seg === l.seg ? 3 : 1.5);
+        const d = dist.get(l) + x.length / x.seg.type.pace + (x.seg === l.seg ? 3 : 1.5) + (x.idx !== l.idx ? 0.3 : 0);
         if (d < (dist.get(x) ?? Infinity)) {
           dist.set(x, d);
           prev.set(x, l);

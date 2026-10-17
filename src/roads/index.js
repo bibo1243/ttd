@@ -2,24 +2,24 @@ import * as THREE from 'three';
 import { arcCurve, joinCurve, minRadius, straightCurve } from '../network.js';
 import { VEHICLE_MODELS } from '../vehicles/models.js';
 import { K } from '../vehicles/kit.js';
-import { JUNCTION_R, Polyline, ROAD_HALF, RoadNet, WALK, crossings, resample } from './net.js';
+import { Polyline, ROAD_TYPES, RoadNet, crossings, junctionGap, outerHalf, resample, roadGap, roadType } from './net.js';
 import { ROAD_MATS, buildRoadMeshes } from './mesh.js';
 import { Traffic } from './traffic.js';
 import { makeShelter } from './props.js';
 import { injectStyle } from './style.js';
 import { rayToGround } from '../planet.js';
 
-// Roads module: lets the player lay roads (with junctions, dead-end turning
-// circles and level crossings), build bus stops, and choose which vehicles
-// drive on the roads, including their own custom types.
+// Roads module: lets the player lay roads of several types (lanes, roads
+// and avenues, with signalised junctions, dead-end turning circles and
+// level crossings), build bus stops, and choose which vehicles drive on the
+// roads, including their own custom types.
 
-export const ROAD_COST = { road: 10, stop: 300, bus: 1200, tree: 15, house: 150, rock: 5 };
+export const ROAD_COST = { stop: 300, bus: 1200, tree: 15, house: 150, rock: 5 };
 const KIND_LABEL = { tree: '棵樹', house: '間房子', rock: '顆石頭' };
 const SAVE_KEY = 'ttdRoads1';
 const RAIL_SAVE_KEY = 'ttdSave2';
 const ISLAND_R = 22;
 const MIN_R = 1.4;
-const ROAD_GAP = 2.05; // closest two separate roads may run (centre to centre)
 const RAIL_GAP = 1.35;
 const SNAP = 0.9;
 const MAX_VEHICLES = 48;
@@ -39,6 +39,7 @@ class RoadsModule {
     this.name = 'roads';
     this.mode = null; // 'road' | 'stop' | 'fleet'
     this.sub = 'build'; // road tool: 'build' | 'demolish'
+    this.roadKind = 'road'; // which ROAD_TYPES the road tool lays
     this.chain = null;
     this.buttons = {};
     this.fleet = { ...DEFAULT_FLEET };
@@ -65,7 +66,7 @@ class RoadsModule {
     world.blockers ??= [];
     this.blockers = [
       { label: '公車站', hit: (x, z, m = 0) => this.traffic.stops.some((s) => (s.pos.x - x) ** 2 + (s.pos.z - z) ** 2 < (0.9 + m) ** 2) },
-      { label: '公路路口', hit: (x, z, m = 0) => [...this.net.nodes].some((n) => n.segs.length >= 3 && (n.pos.x - x) ** 2 + (n.pos.z - z) ** 2 < (JUNCTION_R + 0.4 + m) ** 2) },
+      { label: '公路路口', hit: (x, z, m = 0) => [...this.net.nodes].some((n) => n.segs.length >= 3 && (n.pos.x - x) ** 2 + (n.pos.z - z) ** 2 < (n.radius + 0.4 + m) ** 2) },
     ];
     world.blockers.push(...this.blockers);
     game.look?.onTime?.((night) => {
@@ -221,7 +222,7 @@ class RoadsModule {
     this.ghostRoad.clear();
   }
 
-  #drawGhost(pts, ok, mat = null) {
+  #drawGhost(pts, ok, mat = null, type = null) {
     this.#clearGhostRoad();
     if (!pts || pts.length < 2) return;
     const strip = (o0, o1, y, m) => {
@@ -244,8 +245,21 @@ class RoadsModule {
     };
     const m = mat ?? this.ghostMat;
     if (!mat) this.ghostMat.color.copy(ok ? GOOD : BAD);
-    strip(-ROAD_HALF - WALK, ROAD_HALF + WALK, 0.07, m);
-    if (!mat) for (const o of [-0.035, 0.035]) strip(o - 0.02, o + 0.02, 0.075, this.ghostEdge);
+    const T = type ?? this.type;
+    strip(-outerHalf(T), outerHalf(T), 0.07, m);
+    if (mat) return;
+    // Lane lines, so the ghost shows how many lanes the road will have.
+    const marks = T.median ? [-T.median, T.median] : T.kerb ? [0] : [];
+    if (T.lanes.length > 1) {
+      const div = (T.lanes[0] + T.lanes[1]) / 2;
+      marks.push(-div, div);
+    }
+    marks.push(-T.half, T.half);
+    for (const o of marks) strip(o - 0.02, o + 0.02, 0.075, this.ghostEdge);
+  }
+
+  get type() {
+    return roadType(this.roadKind);
   }
 
   // ---------- Road tool ----------
@@ -257,12 +271,25 @@ class RoadsModule {
     ];
     if (this.chain) actions.push({ label: '結束這條路', run: () => this.#endChain() });
     actions.push({ label: '完成', primary: true, run: () => this.setMode(null) });
+    const T = this.type;
     const base = this.sub === 'build'
       ? this.chain
-        ? '繼續點下一個點延伸道路；點到其他道路上會自動做成路口，穿過鐵路會蓋平交道。右鍵或 Esc 結束這條路。'
-        : '在地上點起點，再點下一個點鋪一段路（每公尺 $10）。從路尾或路邊開始可以接成岔路；和其他道路交叉會自動變成十字路口。'
+        ? '繼續點下一個點延伸道路；點到其他道路上會自動做成有紅綠燈的路口，穿過鐵路會蓋平交道。右鍵或 Esc 結束這條路。'
+        : `在地上點起點，再點下一個點鋪一段${T.label}（每公尺 ${money(T.cost)}）。從路尾或路邊開始可以接成岔路；和其他道路交叉會自動變成有紅綠燈的路口。`
       : '點一段公路把它拆掉，退回一半的建造費。上面的公車站也會一起拆除。';
-    this.#card('公路', extra || base, actions);
+    const picker = this.sub === 'build'
+      ? `<div class="rd-types">${Object.values(ROAD_TYPES).map((t) => `<button class="rd-type ${t.key === this.roadKind ? 'on' : ''}" data-kind="${t.key}">
+          <span class="rd-type-icon">${t.icon}</span><span class="rd-type-name">${t.label}</span>
+          <span class="rd-type-meta">${t.lanesText}・速限 ${t.kmh}</span><span class="rd-type-meta">${money(t.cost)}/公尺</span></button>`).join('')}</div>
+        <div class="hint rd-type-note">${T.note}</div>`
+      : '';
+    this.#card('公路', picker + (extra || base), actions);
+    this.card.info?.querySelectorAll('[data-kind]').forEach((b) => b.addEventListener('click', () => {
+      this.roadKind = b.dataset.kind;
+      this.plan = null;
+      if (this.chain && this.pointer) this.#previewRoad();
+      else this.#roadCard();
+    }));
   }
 
   #setSub(sub) {
@@ -289,7 +316,7 @@ class RoadsModule {
     return (a.x - b.x) ** 2 + (a.z - b.z) ** 2 < r * r;
   }
 
-  #planRoad(start, end) {
+  #planRoad(start, end, type = this.type) {
     const A = start.pos;
     const B = end.pos;
     const problems = [];
@@ -318,25 +345,31 @@ class RoadsModule {
       for (const c of crossings(line, seg.line)) {
         if (joins.some((j) => this.#near(j, c.p, 0.6))) continue;
         if (c.angle < 0.55) problems.push('和道路交叉的角度太斜');
-        cuts.push({ t: c.ta, p: c.p });
+        cuts.push({ t: c.ta, p: c.p, seg });
       }
     }
     cuts.sort((a, b) => a.t - b.t);
     const keyPts = [...joins, ...cuts.map((c) => c.p)];
+    const nodeGap = (n) => junctionGap(type, n.segs.reduce((w, s) => (s.type.half > w.half ? s.type : w), type));
     for (const n of this.net.nodes) {
       if (n.segs.length >= 3 || (n.segs.length === 2 && !n.smooth)) {
-        if (cuts.some((c) => this.#near(c.p, n.pos, 2.8))) problems.push('離其他路口太近');
+        if (cuts.some((c) => this.#near(c.p, n.pos, nodeGap(n)))) problems.push('離其他路口太近');
       }
     }
-    for (let i = 1; i < cuts.length; i++) if (cuts[i].t - cuts[i - 1].t < 2.8) problems.push('路口之間太近');
+    for (let i = 1; i < cuts.length; i++) if (cuts[i].t - cuts[i - 1].t < junctionGap(type, cuts[i].seg.type.half > cuts[i - 1].seg.type.half ? cuts[i].seg.type : cuts[i - 1].seg.type)) problems.push('路口之間太近');
     for (const sn of [start, end]) {
       if (!sn.seg) continue;
-      for (const n of [sn.seg.a, sn.seg.b]) if (n.segs.length >= 2 && this.#near(sn.pos, n.pos, 2.8)) problems.push('離其他路口太近');
+      for (const n of [sn.seg.a, sn.seg.b]) if (n.segs.length >= 2 && this.#near(sn.pos, n.pos, nodeGap(n))) problems.push('離其他路口太近');
     }
     // Keep clear of other roads except where they meet.
-    const far = pts.filter((p, i) => i % 2 === 0 && !keyPts.some((k) => this.#near(p, k, ROAD_GAP + 0.3)));
-    if (far.some((p) => [...this.net.segs].some((s) => s.line.nearest(p.x, p.z).dist < ROAD_GAP))) problems.push('太靠近其他道路');
-    const blocker = this.#blockedBy(pts.filter((p, i) => i % 2 === 0), ROAD_HALF + WALK);
+    const far = pts.filter((p, i) => i % 2 === 0);
+    const tooClose = far.some((p) => [...this.net.segs].some((s) => {
+      const gap = roadGap(type, s.type);
+      if (keyPts.some((k) => this.#near(p, k, gap + 0.3))) return false;
+      return s.line.nearest(p.x, p.z).dist < gap;
+    }));
+    if (tooClose) problems.push('太靠近其他道路');
+    const blocker = this.#blockedBy(pts.filter((p, i) => i % 2 === 0), outerHalf(type));
     if (blocker) problems.push(`會壓到${blocker}`);
 
     // Rails: level crossings are fine at a decent angle.
@@ -357,17 +390,17 @@ class RoadsModule {
     const rails = [...this.game.network.edges].flatMap((e) => e.samples);
     if (pts.some((p, i) => i % 2 === 0 && !railCross.some((c) => this.#near(p, c, 1.7)) && rails.some((q) => this.#near(p, q, RAIL_GAP)))) problems.push('太靠近鐵路');
     for (const s of this.game.passengers.stations ?? []) {
-      if (pts.some((p) => s.contains?.(p.x, p.z, ROAD_HALF + 0.2))) {
+      if (pts.some((p) => s.contains?.(p.x, p.z, type.half + 0.2))) {
         problems.push('會壓到車站');
         break;
       }
     }
     for (const stop of this.traffic.stops) if (pts.some((p) => this.#near(p, stop.pos, 1.3))) problems.push('會壓到公車站');
 
-    const props = this.game.world.scenery.query((x, z, r) => pts.some((p) => this.#near(p, { x, z }, ROAD_HALF + WALK + r * 0.5)));
-    const cost = Math.round(length * ROAD_COST.road) + props.reduce((s, p) => s + (ROAD_COST[p.kind] ?? 0), 0);
+    const props = this.game.world.scenery.query((x, z, r) => pts.some((p) => this.#near(p, { x, z }, outerHalf(type) + r * 0.5)));
+    const cost = Math.round(length * type.cost) + props.reduce((s, p) => s + (ROAD_COST[p.kind] ?? 0), 0);
     if (!problems.length && cost > this.game.money.get()) problems.push('資金不足');
-    return { start, end, curve, pts, line, length, cuts, props, cost, problems: [...new Set(problems)], ok: !problems.length };
+    return { start, end, type, curve, pts, line, length, cuts, props, cost, problems: [...new Set(problems)], ok: !problems.length };
   }
 
   #clearText(props) {
@@ -390,8 +423,8 @@ class RoadsModule {
     this.plan = this.#planRoad(this.chain, end);
     this.#drawGhost(this.plan.pts, this.plan.ok);
     const p = this.plan;
-    let info = p.pts ? `長度 ${p.length.toFixed(1)} 公尺・費用 <b>${money(p.cost)}</b>${this.#clearText(p.props)}` : '';
-    if (p.cuts?.length) info += `<br>會新增 ${p.cuts.length} 個路口`;
+    let info = p.pts ? `${p.type.label} ${p.length.toFixed(1)} 公尺・費用 <b>${money(p.cost)}</b>${this.#clearText(p.props)}` : '';
+    if (p.cuts?.length) info += `<br>會新增 ${p.cuts.length} 個有紅綠燈的路口`;
     info += p.ok ? '<br>點一下鋪這段路。' : `<br><span class="bad">${p.problems.join('、')}</span>`;
     this.#roadCard(info);
   }
@@ -456,7 +489,7 @@ class RoadsModule {
       const pts = plan.line.slice(p.t, q.t);
       pts[0] = p.node.pos.clone();
       pts[pts.length - 1] = q.node.pos.clone();
-      net.addSeg(p.node, q.node, resample(pts, 0.2), plan.cost * ((q.t - p.t) / plan.line.length));
+      net.addSeg(p.node, q.node, resample(pts, 0.2), plan.cost * ((q.t - p.t) / plan.line.length), plan.type);
     }
     this.#changed();
     return b;
@@ -474,7 +507,9 @@ class RoadsModule {
     this.railSeen = this.game.network.version;
     const rails = [...this.game.network.edges].map((e) => (e._roadPoly ??= new Polyline(e.samples)));
     this.group.clear();
-    this.group.add(buildRoadMeshes(this.net, rails, this.traffic.stops.map((st) => st.pos)));
+    const meshes = buildRoadMeshes(this.net, rails, this.traffic.stops.map((st) => st.pos));
+    this.group.add(meshes);
+    this.traffic.setSignals(meshes.userData.signals ?? null);
   }
 
   #registerLamps() {
@@ -511,12 +546,12 @@ class RoadsModule {
     const g = this.pointer;
     this.#unhot();
     const ns = this.net.nearestSeg(g.x, g.z);
-    if (!ns || ns.dist > ROAD_HALF + WALK) return this.#roadCard();
+    if (!ns || ns.dist > outerHalf(ns.seg.type)) return this.#roadCard();
     this.hot = ns.seg;
-    this.#drawGhost(ns.seg.pts, false, this.hotMat);
+    this.#drawGhost(ns.seg.pts, false, this.hotMat, ns.seg.type);
     const stops = this.traffic.stops.filter((s) => s.seg === ns.seg);
     const refund = this.#refundFor(ns.seg);
-    this.#roadCard(`拆除這段 ${ns.seg.length.toFixed(1)} 公尺的公路${stops.length ? `和 ${stops.length} 個公車站` : ''}，退回 ${money(refund)}。`);
+    this.#roadCard(`拆除這段 ${ns.seg.length.toFixed(1)} 公尺的${ns.seg.type.label}${stops.length ? `和 ${stops.length} 個公車站` : ''}，退回 ${money(refund)}。`);
   }
 
   #refundFor(seg) {
@@ -558,7 +593,7 @@ class RoadsModule {
     const problems = [];
     for (const n of [seg.a, seg.b]) {
       if (n.segs.length !== 2 || !n.smooth) {
-        if (n.segs.length >= 2 && f.p.distanceTo(n.pos) < JUNCTION_R + 2.4) problems.push('離路口太近');
+        if (n.segs.length >= 2 && f.p.distanceTo(n.pos) < n.radius + 2.4) problems.push('離路口太近');
       }
     }
     if (ns.s < 1.6 || ns.s > seg.length - 1.6) problems.push('太靠近路的盡頭');
@@ -577,7 +612,7 @@ class RoadsModule {
     if ((this.game.passengers.stations ?? []).some((s) => [pad, ...corners].some((c) => s.contains?.(c.x, c.z, 0.3)))) problems.push('會壓到車站');
     for (const other of this.net.segs) {
       if (other === seg) continue;
-      if ([pad, ...corners].some((c) => other.line.nearest(c.x, c.z).dist < ROAD_HALF + WALK + 0.2)) {
+      if ([pad, ...corners].some((c) => other.line.nearest(c.x, c.z).dist < outerHalf(other.type) + 0.2)) {
         problems.push('會壓到其他道路');
         break;
       }
@@ -634,7 +669,10 @@ class RoadsModule {
   }
 
   get capacity() {
-    return Math.min(MAX_VEHICLES, Math.floor(this.net.totalLength / 2.4));
+    // Avenues, with two lanes each way, hold more than their length.
+    let room = 0;
+    for (const s of this.net.segs) room += s.length * (1 + (s.type.lanes.length - 1) * 0.6);
+    return Math.min(MAX_VEHICLES, Math.floor(room / 2.4));
   }
 
   #count(key) {
@@ -769,7 +807,8 @@ class RoadsModule {
     this.traffic.update(dt, time);
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
-      this.spawnTimer = 0.4;
+      // New vehicles turn up at uneven intervals.
+      this.spawnTimer = 0.25 + Math.random() * 1.4;
       this.#syncFleet();
     }
   }
@@ -796,13 +835,15 @@ class RoadsModule {
     const nodes = [...this.net.nodes];
     const segs = [...this.net.segs];
     const r = (x) => Math.round(x * 1000) / 1000;
+    // v2 adds each segment's road type; v1 saves load as normal roads.
     const data = {
-      v: 1,
+      v: 2,
       nodes: nodes.map((n) => [r(n.pos.x), r(n.pos.z)]),
-      segs: segs.map((s) => ({ a: nodes.indexOf(s.a), b: nodes.indexOf(s.b), cost: Math.round(s.cost), pts: s.pts.map((p) => [r(p.x), r(p.z)]) })),
+      segs: segs.map((s) => ({ a: nodes.indexOf(s.a), b: nodes.indexOf(s.b), cost: Math.round(s.cost), type: s.type.key, pts: s.pts.map((p) => [r(p.x), r(p.z)]) })),
       stops: this.traffic.stops.map((s) => ({ seg: segs.indexOf(s.seg), s: r(s.s), side: s.side, name: s.name })),
       fleet: this.fleet,
       custom: this.custom,
+      kind: this.roadKind,
     };
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify(data));
@@ -819,7 +860,8 @@ class RoadsModule {
     if (!data?.nodes) return;
     this.loading = true;
     const nodes = data.nodes.map(([x, z]) => this.net.addNode(V(x, z)));
-    const segs = data.segs.map((s) => this.net.addSeg(nodes[s.a], nodes[s.b], s.pts.map(([x, z]) => V(x, z)), s.cost));
+    const segs = data.segs.map((s) => this.net.addSeg(nodes[s.a], nodes[s.b], s.pts.map(([x, z]) => V(x, z)), s.cost, roadType(s.type)));
+    if (ROAD_TYPES[data.kind]) this.roadKind = data.kind;
     for (const n of nodes) if (!n.segs.length) this.net.nodes.delete(n);
     this.fleet = { ...DEFAULT_FLEET, ...(data.fleet ?? {}) };
     this.custom = (data.custom ?? []).filter((c) => VEHICLE_MODELS[c.base]);
@@ -836,15 +878,15 @@ class RoadsModule {
   // Lay a small demo town: a loop road with a cross street and two stops.
   demo() {
     const P = (x, z) => ({ pos: V(x, z) });
-    const build = (a, b) => {
-      const plan = this.#planRoad(a, b);
+    const build = (a, b, kind = 'road') => {
+      const plan = this.#planRoad(a, b, roadType(kind));
       if (!plan.ok) {
         console.warn('demo road', plan.problems);
         return null;
       }
       return this.#buildRoad(plan, false);
     };
-    return { P, build, snap: (x, z) => this.#snap(V(x, z)), plan: (a, b) => this.#planRoad(a, b) };
+    return { P, build, snap: (x, z) => this.#snap(V(x, z)), plan: (a, b, kind = 'road') => this.#planRoad(a, b, roadType(kind)) };
   }
 }
 

@@ -360,7 +360,7 @@ export class BuildController {
       const p = curve.getPoint(u);
       const ns = net.nearestSeg(p.x, p.z);
       let parallel = false;
-      if (ns && ns.dist < 1.1) {
+      if (ns && ns.dist - (ns.wide ?? 0) < 1.1) {
         const rt = ns.seg.line.tangentAt(ns.s);
         curve.getTangent(u, tan);
         parallel = Math.abs(rt.x * tan.x + rt.z * tan.z) / Math.hypot(tan.x, tan.z) > 0.7;
