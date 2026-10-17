@@ -353,7 +353,7 @@ export class PassengerSystem {
     if (this.stations.some((s) => s.contains(x, z, 0.3))) return false;
     // Don't loiter on roads (see roads/).
     const road = window.__roads?.net?.nearestSeg(x, z);
-    if (road && road.dist < 1) return false;
+    if (road && road.dist - (road.wide ?? 0) < 1) return false;
     return !this.obstacles.some((o) => (o.x - x) ** 2 + (o.z - z) ** 2 < o.r * o.r);
   };
 

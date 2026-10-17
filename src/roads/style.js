@@ -18,6 +18,13 @@ const CSS = `
 #buildCard button.rd-swatch.on { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #4a90c8; }
 .rd-input { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid #d6dde4; background: #fff; min-width: 0; }
 .rd-hint { line-height: 1.5; }
+.rd-types { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 2px 0 6px; }
+#buildCard button.rd-type { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 4px 5px; border-radius: 12px; background: rgba(238, 242, 245, 0.8); color: #3b3f4a; line-height: 1.25; }
+#buildCard button.rd-type.on { background: #4a90c8; color: #fff; box-shadow: 0 2px 8px rgba(74, 144, 200, 0.35); }
+.rd-type-icon { font-size: 20px; }
+.rd-type-name { font-size: 13px; font-weight: 700; }
+.rd-type-meta { font-size: 10.5px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+.rd-type-note { margin: 0 0 6px; line-height: 1.45; }
 `;
 
 export function injectStyle() {
